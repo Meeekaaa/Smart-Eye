@@ -86,6 +86,9 @@ def merge_results(detection_results, camera_id):
             "liveness": f.get("liveness", 1.0),
             "track_vx": _as_float(f.get("track_vx", 0.0)),
             "track_vy": _as_float(f.get("track_vy", 0.0)),
+            "liveness_pending": bool(f.get("_liveness_pending", False)),
+            "liveness_seconds_left": float(f.get("_liveness_seconds_left", 0.0)) if f.get("_liveness_seconds_left") is not None else 0.0,
+            "spoof_type": f.get("_spoof_type") or f.get("spoof_type"),
         }
         for f in faces
     ]
