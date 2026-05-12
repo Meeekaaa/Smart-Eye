@@ -120,12 +120,30 @@ class VideoWidget(QLabel):
             gender = (face.get("gender") or "unknown").title()
             conf = face.get("confidence") or 0.0
             liveness = face.get("liveness") or 0.0
-            if identity:
-                color = _SUCCESS if liveness >= 0.5 else _WARNING_ORANGE
-                label = f"{identity} ({gender}) {conf:.1%}"
-            else:
+            pending = bool(face.get("liveness_pending", False))
+            secs = int(face.get("liveness_seconds_left", 0.0) or 0)
+            spoof = face.get("spoof_type")
+
+            if spoof:
                 color = _DANGER_DIM
-                label = f"Unknown ({gender}) {conf:.1%}" if conf > 0.1 else f"Face ({gender})"
+                if spoof == "turn_failed":
+                    label = "Verification failed"
+                else:
+                    label = "Verification failed"
+            elif pending:
+                color = _WARNING_ORANGE
+                if secs > 0:
+                    label = f"Turn face left then right ({secs}s)"
+                else:
+                    label = "Turn face left then right"
+            else:
+                if identity:
+                    color = _SUCCESS if liveness >= 0.5 else _WARNING_ORANGE
+                    label = f"{identity} ({gender}) {conf:.1%}"
+                else:
+                    color = _DANGER_DIM
+                    label = f"Unknown ({gender}) {conf:.1%}" if conf > 0.1 else f"Face ({gender})"
+
             draw_box(face["bbox"], color, label)
 
         if not self._state.get("all_faces") and self._state.get("face_bbox"):

@@ -61,9 +61,9 @@ class DetectionTab(QWidget):
         self._liveness_toggle = ToggleSwitch()
         bl.addWidget(
             _srow(
-                "Liveness / anti-spoof",
+                "Liveness / Human Verification",
                 self._liveness_toggle,
-                hint="Reject photo / screen attacks. Requires a supported model; adds slight latency.",
+                hint="Reject photo/screen attacks. Requires a supported model; adds slight latency.",
             )
         )
 
@@ -91,7 +91,7 @@ class DetectionTab(QWidget):
         return bar
 
     def _save(self) -> None:
-        db.set_setting("liveness_enabled", "1" if self._liveness_toggle.isChecked() else "0")
+        db.set_setting("liveness_check_global", "1" if self._liveness_toggle.isChecked() else "0")
         if db.get_bool("ui_show_save_popups", False):
             from PySide6.QtWidgets import QMessageBox
 
@@ -119,4 +119,4 @@ class DetectionTab(QWidget):
         anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def load(self) -> None:
-        self._liveness_toggle.setChecked(db.get_bool("liveness_enabled", False))
+        self._liveness_toggle.setChecked(db.get_bool("liveness_check_global", False))

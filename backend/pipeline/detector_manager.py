@@ -11,6 +11,7 @@ import cv2
 from backend.repository import db
 from backend.models import model_loader
 from utils import config
+from backend.pipeline.liveness_manager import LivenessManager
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +236,11 @@ class DetectorManager:
         self._executor_workers = workers
         self._executor_lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="det-worker")
+        # Per-camera liveness/motion challenge manager
+        try:
+            self._liveness = LivenessManager()
+        except Exception:
+            self._liveness = None
 
     def _recreate_executor(self):
         with self._executor_lock:
@@ -674,13 +680,8 @@ class DetectorManager:
                     idinfo, score = self._face_model.identify(f.get("embedding"), threshold=cam_thresh)
                     f["identity"] = idinfo
                     f["confidence"] = score
-                    if not aggressive_mode:
-                        liveness_required = config.liveness_global()
-                        if idinfo and not liveness_required:
-                            row = db.get_known_face(idinfo.get("id"))
-                            if row and row.get("liveness_required"):
-                                liveness_required = True
-                        f["liveness"] = self._face_model.check_liveness(small, {"bbox": f.get("bbox")}) if liveness_required else 1.0
+                    # Liveness evaluation moved to post-smoothing stage to
+                    # avoid resets from jitter/building of trackers.
                     f["last_identify_frame"] = frame_idx
                     identifies_used += 1
                 except Exception:
@@ -1023,6 +1024,14 @@ class DetectorManager:
                 self._rebuild_trackers(camera_id, faces, objects, max_trackers)
             self._apply_smoothing(camera_id, faces, objects)
 
+            # Evaluate liveness after smoothing so bbox jitter/resets don't
+            # break per-face liveness tracks that rely on stable coordinates.
+            if faces and self._liveness is not None:
+                try:
+                    self._evaluate_liveness_for_frame(camera_id, faces, frame, frame_idx)
+                except Exception:
+                    logger.debug("Liveness evaluation failed for camera %s", camera_id, exc_info=True)
+
         return {
             "faces": faces,
             "objects": objects,
@@ -1035,7 +1044,7 @@ class DetectorManager:
             allowed_pids = set(self._plugin_models.keys())
         return [o for o in objects if o.get("plugin_id") in allowed_pids]
 
-    def _identify_faces_for_frame(self, camera_id, faces, aggressive_mode, max_identify, small, frame_idx):
+    def _identify_faces_for_frame(self, camera_id, faces, aggressive_mode, max_identify, frame_for_liveness, frame_idx):
         try:
             max_faces_identify = int(config.get("max_faces_identify_per_frame", 16) or 16)
         except Exception:
@@ -1054,7 +1063,43 @@ class DetectorManager:
         state = self._get_camera_state(camera_id)
         with state.trackers_lock:
             existing_trackers = list(state.trackers)
-        self._identify_faces(camera_id, faces_for_identify, existing_trackers, aggressive_mode, max_identify, small, frame_idx)
+        self._identify_faces(camera_id, faces_for_identify, existing_trackers, aggressive_mode, max_identify, frame_for_liveness, frame_idx)
+
+    def _evaluate_liveness_for_frame(self, camera_id, faces, frame_for_liveness, frame_idx):
+        try:
+            for f in faces:
+                try:
+                    liveness_required = config.liveness_global()
+                    if f.get("identity") and not liveness_required:
+                        row = db.get_known_face(f["identity"].get("id"))
+                        if row and row.get("liveness_required"):
+                            liveness_required = True
+                except Exception:
+                    liveness_required = False
+
+                if liveness_required and self._liveness is not None:
+                    try:
+                        lval, spoof, pending, seconds_left = self._liveness.evaluate(camera_id, frame_for_liveness, f, frame_idx)
+                        f["liveness"] = lval
+                        if spoof:
+                            f["_spoof_type"] = spoof
+                            f.pop("_liveness_pending", None)
+                            f.pop("_liveness_seconds_left", None)
+                        elif pending:
+                            f["_liveness_pending"] = True
+                            try:
+                                f["_liveness_seconds_left"] = float(seconds_left)
+                            except Exception:
+                                f["_liveness_seconds_left"] = 0.0
+                        else:
+                            f.pop("_liveness_pending", None)
+                            f.pop("_liveness_seconds_left", None)
+                    except Exception:
+                        f["liveness"] = 1.0
+                else:
+                    f["liveness"] = 1.0
+        except Exception:
+            logger.debug("_evaluate_liveness_for_frame failed", exc_info=True)
 
     def _is_face_enabled(self, camera_id):
         try:
