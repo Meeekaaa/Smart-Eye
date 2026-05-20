@@ -2,7 +2,7 @@
 
 import logging
 
-from PySide6.QtCore import QPropertyAnimation
+from PySide6.QtCore import QPropertyAnimation, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -49,6 +49,8 @@ _PROVIDER_PRESETS = [
 
 
 class PerformanceTab(QWidget):
+    tab_transitions_changed = Signal(bool)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._build_ui()
@@ -177,6 +179,15 @@ class PerformanceTab(QWidget):
 
         bl.addWidget(_make_sdiv("UI & Tabs"))
 
+        self._tab_transitions = ToggleSwitch()
+        bl.addWidget(
+            _srow(
+                "Tab transition animations",
+                self._tab_transitions,
+                hint="Animates page and panel changes when switching tabs.",
+            )
+        )
+
         self._pause_tabs = ToggleSwitch()
         bl.addWidget(
             _srow(
@@ -269,10 +280,13 @@ class PerformanceTab(QWidget):
         db.set_setting("frame_skip", str(self._frame_skip.value()))
         db.set_setting("detection_interval", str(self._detection_interval.value()))
         db.set_setting("limit_resources", 1 if self._limit_resources.isChecked() else 0)
+        tab_transitions_enabled = self._tab_transitions.isChecked()
+        db.set_setting("ui_tab_transitions_enabled", 1 if tab_transitions_enabled else 0)
         db.set_setting("ui_pause_inactive_tabs", 1 if self._pause_tabs.isChecked() else 0)
         db.set_setting("ui_unload_on_leave", 1 if self._unload_tabs.isChecked() else 0)
         db.set_setting("ui_unload_idle_min", str(self._unload_idle_min.value()))
         db.set_setting("auto_pause_live_when_idle", 1 if self._auto_pause_live.isChecked() else 0)
+        self.tab_transitions_changed.emit(tab_transitions_enabled)
 
         self._apply_provider_tuning(face_pref, plugin_pref)
 
@@ -345,6 +359,7 @@ class PerformanceTab(QWidget):
         self._detection_interval.setValue(int(db.get_int("detection_interval", 1) or 1))
         self._limit_resources.setChecked(db.get_bool("limit_resources", False))
 
+        self._tab_transitions.setChecked(db.get_bool("ui_tab_transitions_enabled", True))
         self._pause_tabs.setChecked(db.get_bool("ui_pause_inactive_tabs", True))
         self._unload_tabs.setChecked(db.get_bool("ui_unload_on_leave", True))
         self._unload_idle_min.setValue(int(db.get_int("ui_unload_idle_min", 5) or 5))

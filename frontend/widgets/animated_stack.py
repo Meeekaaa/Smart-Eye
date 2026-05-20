@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+import contextlib
+
 from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation, QPoint, Signal
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QStackedWidget, QWidget
+
+
+def _default_animations_enabled() -> bool:
+    with contextlib.suppress(Exception):
+        from backend.repository import db
+
+        return bool(db.get_bool("ui_tab_transitions_enabled", True))
+    return True
 
 
 class AnimatedStackedWidget(QStackedWidget):
@@ -16,6 +26,7 @@ class AnimatedStackedWidget(QStackedWidget):
         use_fade: bool = True,
         max_fade_pixels: int | None = 1_000_000,
         easing: QEasingCurve.Type = QEasingCurve.Type.OutCubic,
+        animations_enabled: bool | None = None,
     ) -> None:
         super().__init__(parent)
         self._anim_duration = duration
@@ -23,11 +34,28 @@ class AnimatedStackedWidget(QStackedWidget):
         self._use_fade = use_fade
         self._max_fade_pixels = max_fade_pixels
         self._easing = easing
+        self._animations_enabled = _default_animations_enabled() if animations_enabled is None else bool(animations_enabled)
         self._anim_group: QParallelAnimationGroup | None = None
         self._anim_target: QWidget | None = None
+        self._anim_final_pos: QPoint | None = None
         self._owns_effect = False
         self._pending_widget: QWidget | None = None
         self._animating = False
+
+    def setAnimationsEnabled(self, enabled: bool) -> None:
+        self._animations_enabled = bool(enabled)
+        if self._animations_enabled or self._anim_group is None:
+            return
+        self._anim_group.stop()
+        if self._anim_target is not None and self._anim_final_pos is not None:
+            self._anim_target.move(self._anim_final_pos)
+        self._cleanup_animation()
+        current = self.currentWidget()
+        if current is not None:
+            self.transition_finished.emit(current)
+
+    def animationsEnabled(self) -> bool:
+        return self._animations_enabled
 
     def setCurrentIndex(self, index: int) -> None:
         widget = self.widget(index)
@@ -44,8 +72,13 @@ class AnimatedStackedWidget(QStackedWidget):
             self._pending_widget = widget
             if self._anim_group is not None:
                 self._anim_group.stop()
+                if self._anim_target is not None and self._anim_final_pos is not None:
+                    self._anim_target.move(self._anim_final_pos)
                 self._cleanup_animation()
         super().setCurrentWidget(widget)
+        if not self._animations_enabled:
+            self.transition_finished.emit(widget)
+            return
         use_fade = self._should_fade(widget)
         if not use_fade and self._anim_offset <= 0:
             self.transition_finished.emit(widget)
@@ -56,6 +89,7 @@ class AnimatedStackedWidget(QStackedWidget):
         self._animating = True
         final_pos = widget.pos()
         start_pos = QPoint(final_pos.x(), final_pos.y() + self._anim_offset)
+        self._anim_final_pos = final_pos
         widget.move(start_pos)
 
         group = QParallelAnimationGroup(self)
@@ -108,6 +142,7 @@ class AnimatedStackedWidget(QStackedWidget):
                 self._anim_target.setGraphicsEffect(None)
         self._anim_group = None
         self._anim_target = None
+        self._anim_final_pos = None
         self._owns_effect = False
         self._animating = False
 

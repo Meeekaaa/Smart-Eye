@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 27
+CURRENT_VERSION = 28
 
 
 def apply(conn):
@@ -65,7 +65,21 @@ def apply(conn):
         _migrate_v26(conn)
     if version < 27:
         _migrate_v27(conn)
+    if version < 28:
+        _migrate_v28(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v28(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("ui_tab_transitions_enabled", "1", "bool", "Tab transition animations", "performance"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        ("bool", "Tab transition animations", "performance", "ui_tab_transitions_enabled"),
+    )
     conn.commit()
 
 

@@ -38,6 +38,7 @@ data/clips_live/*
 data/cache/*
 
 tests/
+docs/
 
 data/*.db-wal
 data/*.db-shm

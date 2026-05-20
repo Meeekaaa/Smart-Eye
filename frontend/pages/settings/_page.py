@@ -77,6 +77,7 @@ def _load_icon(filename: str) -> QIcon:
 
 class SettingsPage(QWidget):
     theme_changed = Signal(str)
+    tab_transitions_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -200,6 +201,7 @@ class SettingsPage(QWidget):
         self._general_tab.debug_mode_changed.connect(self._set_debug_visible)
         self._general_tab.experimental_mode_changed.connect(self._set_experimental_visible)
         self._general_tab.theme_changed.connect(self.theme_changed.emit)
+        self._performance_tab.tab_transitions_changed.connect(self.tab_transitions_changed.emit)
 
         self._switch_to(0)
         return self._stack

@@ -222,6 +222,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('insightface_allowed_modules', '["det
 INSERT OR IGNORE INTO app_settings VALUES ('limit_resources', '0', 'bool', 'Limit Resource Usage', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('max_cpu_cores', '2', 'int', 'Max CPU Cores', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('max_ram_mb', '4096', 'int', 'Max RAM (MB)', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('ui_tab_transitions_enabled', '1', 'bool', 'Tab transition animations', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_pause_inactive_tabs', '1', 'bool', 'Pause inactive tabs', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_on_leave', '1', 'bool', 'Unload heavy tabs on leave', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_idle_min', '5', 'int', 'Unload idle tabs after (min)', 'performance');

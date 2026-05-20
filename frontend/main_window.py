@@ -289,6 +289,19 @@ class MainWindow(QMainWindow):
                 page.theme_changed.disconnect(self._on_theme_changed)
             with contextlib.suppress(Exception):
                 page.theme_changed.connect(self._on_theme_changed)
+        if hasattr(page, "tab_transitions_changed"):
+            with contextlib.suppress(Exception):
+                page.tab_transitions_changed.disconnect(self._set_tab_transitions_enabled)
+            with contextlib.suppress(Exception):
+                page.tab_transitions_changed.connect(self._set_tab_transitions_enabled)
+
+    def _set_tab_transitions_enabled(self, enabled: bool) -> None:
+        app = QApplication.instance()
+        widgets = app.allWidgets() if app is not None else []
+        for widget in widgets:
+            if isinstance(widget, AnimatedStackedWidget):
+                with contextlib.suppress(Exception):
+                    widget.setAnimationsEnabled(enabled)
 
     def _recreate_current_after_theme(self, expected_key: str) -> None:
         if self._current_key != expected_key:
