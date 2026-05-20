@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -29,6 +28,7 @@ from frontend.widgets.heatmap_widget import HeatmapWidget
 from frontend.widgets.stat_card_widget import StatCardWidget
 from frontend.widgets.base.roster_card_base import apply_roster_card_style, build_roster_card_layout
 from frontend.date_utils import normalize_date_range, qdate_to_date
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 
 
 from frontend.styles._colors import (
@@ -301,7 +301,7 @@ class AnalyticsPage(QWidget):
         _tab_sep.setStyleSheet(divider_style(_BORDER_DIM))
         tab_card_vbox.addWidget(_tab_sep)
 
-        self._a_stack = QStackedWidget()
+        self._a_stack = AnimatedStackedWidget()
         self._a_stack.setStyleSheet(transparent_surface_style())
 
         self._compliance_chart = ChartWidget("Compliance Trend")

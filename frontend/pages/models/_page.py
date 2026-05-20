@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
     QGraphicsOpacityEffect,
@@ -36,6 +35,7 @@ from frontend.app_theme import page_base_styles, safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.dialogs import apply_popup_theme
 from frontend.widgets.toggle_switch import ToggleSwitch
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles._colors import (
     _ACCENT,
     _ACCENT_HI_BG_28,
@@ -328,7 +328,7 @@ class ModelsPage(QWidget):
         tb.addStretch()
         root.addWidget(tab_bar)
 
-        self._stack = QStackedWidget()
+        self._stack = AnimatedStackedWidget()
         self._stack.setStyleSheet(_BG_BASE_STYLE)
         self._stack.addWidget(self._build_face_tab())
         self._stack.addWidget(self._build_object_tab())

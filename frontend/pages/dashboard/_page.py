@@ -368,12 +368,17 @@ class DashboardPage(QWidget):
             self._multi_feed.set_grid_size(size)
 
     def _reload_plugins(self):
-        from backend.pipeline.detector_manager import get_manager
+        from backend.pipeline.detector_manager import notify_plugins_changed
 
-        mgr = get_manager()
-        mgr.reload()
-        mgr.invalidate_camera_cache()
-        self._update_hud_counts()
+        try:
+            notify_plugins_changed()
+            # Refresh live feeds and provider badges so any plugin/provider change is visible.
+            self._sync_feeds()
+            self._update_providers()
+            self._set_hud("Plugins reloaded", _SUCCESS)
+        except Exception:
+            logger.exception("Dashboard plugin reload failed")
+            self._set_hud("Plugin reload failed -- check logs", _DANGER)
 
     def _start_all(self):
         mgr = get_camera_manager()

@@ -238,9 +238,12 @@ class GeneralTab(QWidget):
             from PySide6.QtWidgets import QMessageBox
 
             QMessageBox.information(self, "Saved", "General settings saved.")
+            if theme_value != old_theme or new_theme_json != old_theme_json:
+                self.theme_changed.emit(theme_value)
         else:
             if theme_value != old_theme or new_theme_json != old_theme_json:
                 self._flash_status("Saved. Restart required for theme changes")
+                self.theme_changed.emit(theme_value)
             else:
                 self._flash_status("Saved")
             logger.info("General settings saved.")

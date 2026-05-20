@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles._btn_styles import _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
 from frontend.styles._input_styles import _SEARCH_INPUT
 
@@ -274,7 +274,7 @@ class NotificationsConfigPage(QWidget):
         self._smtp_panel.setStyleSheet(f"background-color: {_BG_SURFACE};")
         self._smtp_panel.close_requested.connect(self._close_right)
 
-        self._right_stack = QStackedWidget()
+        self._right_stack = AnimatedStackedWidget()
         self._right_stack.addWidget(self._profile_panel)
         self._right_stack.addWidget(self._new_profile_panel)
         self._right_stack.addWidget(self._smtp_panel)

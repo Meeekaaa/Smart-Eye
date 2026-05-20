@@ -1,4 +1,6 @@
 ﻿import contextlib
+import importlib
+import sys
 import logging
 
 from PySide6.QtCore import (
@@ -16,7 +18,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QMenu,
-    QStackedWidget,
     QSystemTrayIcon,
     QWidget,
 )
@@ -31,6 +32,7 @@ from backend.services.service_manager import get_service_manager
 from frontend.widgets.alert_popup import show_alert
 from frontend.navigation import nav_label_map
 from frontend.widgets.auth_overlay import AuthOverlay
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.widgets.sidebar import SidebarWidget, LOGO_ICON_PATH
 from frontend.theme_runtime import invalidate_theme_cache
 from frontend.state.session import build_trusted_user, compute_access, pick_initial_tab
@@ -75,7 +77,7 @@ class MainWindow(QMainWindow):
             current_theme=self._current_theme,
         )
 
-        self._stack = QStackedWidget()
+        self._stack = AnimatedStackedWidget()
         self._stack.setStyleSheet("background: transparent;")
 
         main_layout.addWidget(self._sidebar)
@@ -130,16 +132,12 @@ class MainWindow(QMainWindow):
         self._build_auth_overlay()
         self._init_system_tray()
         if "dashboard" in self._pages:
+            page = self._pages.get("dashboard")
+            self._schedule_page_activation(page)
             self._stack.setCurrentWidget(self._pages["dashboard"])
             self._sidebar.set_active("dashboard")
             self._current_key = "dashboard"
             self._mark_active("dashboard")
-            try:
-                page = self._pages.get("dashboard")
-                if page is not None and hasattr(page, "on_activated"):
-                    page.on_activated()
-            except Exception:
-                pass
             self._log_page_state("startup")
         self._sidebar.set_access(set(), False)
         if self._auth_required:
@@ -158,7 +156,7 @@ class MainWindow(QMainWindow):
             return
         if self._pages[key] is None:
             try:
-                page = create_page(key, self._rules_service)
+                page = self._page_factory_module().create_page(key, self._rules_service)
                 if page is None:
                     return
                 self._pages[key] = page
@@ -187,17 +185,33 @@ class MainWindow(QMainWindow):
                 current.on_deactivated()
         if prev_key:
             self._release_services(prev_key)
+        page = self._pages[key]
+        self._schedule_page_activation(page)
         self._stack.setCurrentWidget(self._pages[key])
         self._sidebar.set_active(key)
-        page = self._pages[key]
         self._current_key = key
         self._mark_active(key)
         self._acquire_services(key)
-        if hasattr(page, "on_activated"):
-            page.on_activated()
         if prev_key and prev_key != key:
             self._maybe_unload_on_leave(prev_key)
         self._log_page_state(f"navigated:{key}")
+
+    def _schedule_page_activation(self, page) -> None:
+        if page is None or not hasattr(page, "on_activated"):
+            return
+        if isinstance(self._stack, AnimatedStackedWidget):
+            def _on_finish(widget):
+                with contextlib.suppress(Exception):
+                    self._stack.transition_finished.disconnect(_on_finish)
+                if widget is page:
+                    try:
+                        page.on_activated()
+                    except Exception:
+                        pass
+
+            self._stack.transition_finished.connect(_on_finish)
+        else:
+            QTimer.singleShot(0, page.on_activated)
 
     def _on_theme_changed(self, theme_name: str) -> None:
         try:
@@ -207,20 +221,22 @@ class MainWindow(QMainWindow):
             invalidate_theme_cache()
             with contextlib.suppress(Exception):
                 config.invalidate_cache()
+            self._reload_theme_modules()
+            with contextlib.suppress(Exception):
+                self._page_specs = self._page_factory_module().get_page_specs(self._rules_service)
             loaded_keys = [k for k, v in self._pages.items() if v is not None]
-            self.setStyleSheet(get_theme(self._current_theme))
+            app = QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(get_theme(self._current_theme))
+            else:
+                self.setStyleSheet(get_theme(self._current_theme))
             if hasattr(self, "_side_border") and self._side_border is not None:
                 self._side_border.setStyleSheet(f"background: {_c._BG_NAV_DARK}; border: none;")
             if hasattr(self, "_sidebar") and hasattr(self._sidebar, "refresh_theme"):
                 self._sidebar.refresh_theme()
-            self._theme_dirty_pages = set(loaded_keys)
 
-
-            current_key = self._current_key or "dashboard"
-            if current_key == "settings":
-                QTimer.singleShot(120, lambda ck=current_key: self._recreate_current_after_theme(ck))
-            elif current_key:
-                QTimer.singleShot(0, lambda ck=current_key: self._recreate_current_after_theme(ck))
+            for key in list(loaded_keys):
+                self._recreate_page(key)
 
 
             self.style().unpolish(self)
@@ -230,6 +246,39 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.exception("Failed to apply theme at runtime")
 
+    def _reload_theme_modules(self) -> None:
+        style_targets = (
+            "frontend.styles._colors",
+            "frontend.styles._btn_styles",
+            "frontend.styles._input_styles",
+            "frontend.styles.page_styles",
+            "frontend.styles.theme_parts",
+        )
+
+        for name in style_targets:
+            module = sys.modules.get(name)
+            if module is not None:
+                with contextlib.suppress(Exception):
+                    importlib.reload(module)
+
+        for name in sorted(sys.modules.keys()):
+            if not (name.startswith("frontend.pages.") or name.startswith("frontend.widgets.")):
+                continue
+            module = sys.modules.get(name)
+            if module is None:
+                continue
+            with contextlib.suppress(Exception):
+                importlib.reload(module)
+
+        module = sys.modules.get("frontend.state.page_factory")
+        if module is not None:
+            with contextlib.suppress(Exception):
+                importlib.reload(module)
+
+    @staticmethod
+    def _page_factory_module():
+        return importlib.import_module("frontend.state.page_factory")
+
     def _bind_settings_page(self, page) -> None:
         if page is None:
             return
@@ -238,6 +287,8 @@ class MainWindow(QMainWindow):
         if hasattr(page, "theme_changed"):
             with contextlib.suppress(Exception):
                 page.theme_changed.disconnect(self._on_theme_changed)
+            with contextlib.suppress(Exception):
+                page.theme_changed.connect(self._on_theme_changed)
 
     def _recreate_current_after_theme(self, expected_key: str) -> None:
         if self._current_key != expected_key:
@@ -268,7 +319,7 @@ class MainWindow(QMainWindow):
                 old.deleteLater()
             self._pages[key] = None
 
-        page = create_page(key, self._rules_service)
+        page = self._page_factory_module().create_page(key, self._rules_service)
         if page is None:
             return
         self._pages[key] = page

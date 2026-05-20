@@ -37,7 +37,7 @@ from frontend.styles._colors import (
     _WHITE_03,
     _WHITE_04,
 )
-from frontend.styles._shadows import apply_shadow_float
+from frontend.styles._shadows import apply_shadow_float, apply_shadow_glow
 from frontend.styles.page_styles import muted_label_style, text_style, transparent_surface_style
 from frontend.ui_tokens import (
     FONT_SIZE_15,
@@ -804,4 +804,8 @@ class SidebarWidget(QWidget):
             btn.expand(expanded)
 
     def _on_anim_finished(self):
-        pass
+        target = _SIDEBAR_EXPANDED if self._expanded else _SIDEBAR_COLLAPSED
+        self.setMinimumWidth(target)
+        self.setMaximumWidth(target)
+        if self._pending_expanded != self._expanded:
+            self._set_expanded(self._pending_expanded)

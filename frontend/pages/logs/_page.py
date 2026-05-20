@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QStackedWidget,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -34,6 +33,7 @@ from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.app_theme import page_base_styles, safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.widgets.toggle_switch import ToggleSwitch
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 
 from frontend.styles._colors import (
     _ACCENT,
@@ -502,7 +502,7 @@ class LogsViewerPage(QWidget):
         stack_layout.setContentsMargins(0, 0, 0, 0)
         stack_layout.setSpacing(0)
 
-        self._details_stack = QStackedWidget()
+        self._details_stack = AnimatedStackedWidget()
         stack_layout.addWidget(self._details_stack)
 
         self._detail_table = QTableWidget()

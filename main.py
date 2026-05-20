@@ -142,6 +142,12 @@ def main():
     app.setApplicationName("SmartEye")
     app.setOrganizationName("SmartEye")
 
+    from frontend.widgets.press_animation_filter import install_press_animations
+
+    try:
+        install_press_animations(app, press_opacity=0.88)
+    except Exception:
+        pass
     try:
         from frontend.widgets.combobox_popup import setup_combobox_popup_behavior
 

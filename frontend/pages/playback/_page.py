@@ -31,13 +31,13 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QCheckBox,
     QScrollArea,
-    QStackedWidget,
     QWidget,
 )
 
 from backend.camera.playback_thread import PlaybackThread
 from backend.repository import db
 from frontend.app_theme import page_base_styles, safe_set_point_size
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.dialogs import apply_popup_theme
 from frontend.widgets.toggle_switch import ToggleSwitch
@@ -218,7 +218,7 @@ class PlaybackPage(QWidget):
         self._class_filter_dialog: QDialog | None = None
         self._class_filter_checks: dict[str, QCheckBox] = {}
         self._disabled_playback_classes: set[str] = set()
-        self._media_stack: QStackedWidget | None = None
+        self._media_stack: AnimatedStackedWidget | None = None
         self._media_tab_btns: dict[str, QPushButton] = {}
         self._media_open_folder_btn: QPushButton | None = None
         self._snapshots_list: QListWidget | None = None
@@ -483,7 +483,7 @@ QSlider::handle:horizontal {{
         media_tab_l.addWidget(self._media_open_folder_btn)
         media_l.addWidget(media_tab_bar)
 
-        self._media_stack = QStackedWidget()
+        self._media_stack = AnimatedStackedWidget()
 
         clips_tab = QWidget()
         ccv = QVBoxLayout(clips_tab)

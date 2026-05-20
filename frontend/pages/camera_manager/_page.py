@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles._btn_styles import _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
 from frontend.styles._input_styles import _SEARCH_INPUT
 from frontend.styles._colors import _ACCENT_BG_22, _MUTED_BG_25
@@ -275,7 +275,7 @@ class CameraManagerPage(QWidget):
         self._add_panel.saved.connect(self._on_add_camera_saved)
         self._add_panel.close_requested.connect(self._close_add_panel)
 
-        self._right_stack = QStackedWidget()
+        self._right_stack = AnimatedStackedWidget()
         self._right_stack.addWidget(self._detail_panel)
         self._right_stack.addWidget(self._add_panel)
 

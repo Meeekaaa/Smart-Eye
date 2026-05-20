@@ -17,13 +17,13 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.styles._btn_styles import _ICON_BTN_GHOST_DANGER
 from frontend.styles._colors import (
@@ -484,7 +484,7 @@ class ConditionRow(QFrame):
         self._op.setFixedWidth(SIZE_FIELD_W_SM)
         self._op.setStyleSheet(_combo_ss())
 
-        self._val_stack = QStackedWidget()
+        self._val_stack = AnimatedStackedWidget()
         self._val_stack.setStyleSheet("background:transparent;")
 
         self._val_text = QLineEdit(value)

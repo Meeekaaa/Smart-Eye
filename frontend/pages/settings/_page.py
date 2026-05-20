@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles.page_styles import divider_style
 from frontend.ui_tokens import (
     FONT_SIZE_LARGE,
@@ -178,7 +178,7 @@ class SettingsPage(QWidget):
         return sep
 
     def _build_content(self) -> QWidget:
-        self._stack = QStackedWidget()
+        self._stack = AnimatedStackedWidget()
         self._stack.setStyleSheet(f"background: {_BG_SURFACE};")
 
         self._general_tab = GeneralTab()

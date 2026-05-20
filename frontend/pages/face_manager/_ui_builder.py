@@ -12,13 +12,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles._btn_styles import _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
 from frontend.styles._input_styles import _SEARCH_INPUT
 from frontend.styles._colors import _MUTED_BG_25
@@ -245,7 +245,7 @@ def build_page_ui(page) -> None:
     page._detail_panel.delete_requested.connect(page._delete_face)
     page._detail_panel.enroll_requested.connect(page._enroll_dialog)
 
-    page._right_stack = QStackedWidget()
+    page._right_stack = AnimatedStackedWidget()
     page._right_stack.addWidget(page._detail_panel)
     page._enroll_panel = None
 

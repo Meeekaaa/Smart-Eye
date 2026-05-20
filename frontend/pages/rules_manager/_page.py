@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -27,6 +26,7 @@ from frontend.services.rules_service import RulesService
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.dialogs import apply_popup_theme
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 
 from frontend.styles._colors import _ACCENT_BG_22, _MUTED_BG_25
 from frontend.styles._btn_styles import _SECONDARY_BTN, _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
@@ -288,7 +288,7 @@ class RulesManagerPage(QWidget):
         self._detail_panel.saved.connect(self._on_rule_saved)
         self._detail_panel.close_requested.connect(self._close_detail)
 
-        self._right_stack = QStackedWidget()
+        self._right_stack = AnimatedStackedWidget()
         self._right_stack.addWidget(self._detail_panel)
 
         self._splitter.addWidget(left_panel)
