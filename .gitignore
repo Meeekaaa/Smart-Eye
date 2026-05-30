@@ -39,6 +39,8 @@ data/cache/*
 
 tests/
 docs/
+final_report.md
+final_report.pdf
 
 data/*.db-wal
 data/*.db-shm
