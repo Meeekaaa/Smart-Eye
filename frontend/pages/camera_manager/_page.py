@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.services.camera_service import CameraService
 from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles._btn_styles import _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
 from frontend.styles._input_styles import _SEARCH_INPUT
@@ -201,7 +202,7 @@ class CameraManagerPage(QWidget):
         sicon.setStyleSheet(f"color: {_TEXT_MUTED}; background: transparent; font-size: {FONT_SIZE_15}px;")
         search_row.addWidget(sicon)
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("Search cameras…")
+        self._search_edit.setPlaceholderText("Search cameras...")
         self._search_edit.setFixedHeight(SIZE_BADGE_H)
         self._search_edit.setStyleSheet(_SEARCH_INPUT)
         self._search_edit.textChanged.connect(self._apply_filter_and_search)
@@ -216,7 +217,7 @@ class CameraManagerPage(QWidget):
         tl.setContentsMargins(SPACE_3, SPACE_3, SPACE_3, SPACE_3)
         tl.setSpacing(SPACE_XXS)
 
-        for key, label in [("all", "All"), ("active", "Active"), ("inactive", "Inactive")]:
+        for key, label in [("all", "All"), ("active", "Enabled"), ("inactive", "Disabled")]:
             btn = QPushButton()
             btn.setObjectName("Tab")
             btn.setCheckable(True)
@@ -472,13 +473,7 @@ class CameraManagerPage(QWidget):
 
     def _on_delete_camera(self, cam_id: int):
         try:
-            from backend.camera.camera_manager import get_camera_manager
-
-            try:
-                get_camera_manager().stop_camera(cam_id)
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                pass
-            db.delete_camera(cam_id)
+            CameraService().delete_camera(cam_id)
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             logger.exception("Failed to delete camera %s", cam_id)
             return
@@ -487,6 +482,8 @@ class CameraManagerPage(QWidget):
         self._refresh()
 
     def _install_dialog_logger(self):
+        if not db.get_bool("debug_window_trace", False):
+            return
         app = QApplication.instance()
         if app is None or hasattr(self, "_dlg_logger"):
             return

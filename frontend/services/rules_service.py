@@ -4,6 +4,11 @@ from backend.repository import db
 from backend.pipeline.rule_engine import simulate_rule
 
 
+_ALLOWED_ATTRIBUTES = {"identity", "gender", "object", "objects"}
+_ALLOWED_OPERATORS = {"eq", "neq", "contains", "gt", "lt", "gte", "lte"}
+_ALLOWED_ALARM_ACTIONS = {"sound", "email", "webhook"}
+
+
 class RulesService:
     def get_rules(self) -> list[dict]:
         return db.get_rules()
@@ -24,6 +29,8 @@ class RulesService:
         conditions: list[dict],
         alarms: list[dict],
     ) -> int:
+        self.validate_conditions(conditions)
+        self.validate_alarms(alarms)
         if rule_id is None:
             rid = db.add_rule(
                 data["name"],
@@ -61,6 +68,29 @@ class RulesService:
                 alarm["cooldown_sec"],
             )
         return rid
+
+    def validate_conditions(self, conditions: list[dict]) -> None:
+        for idx, cond in enumerate(conditions, 1):
+            attr = str(cond.get("attribute") or "").strip()
+            op = str(cond.get("operator") or "").strip()
+            value = str(cond.get("value") or "").strip()
+            if attr not in _ALLOWED_ATTRIBUTES:
+                raise ValueError(f"Condition {idx} has an unsupported field.")
+            if op not in _ALLOWED_OPERATORS:
+                raise ValueError(f"Condition {idx} has an unsupported operator.")
+            if not value:
+                raise ValueError(f"Condition {idx} needs a value.")
+
+    def validate_alarms(self, alarms: list[dict]) -> None:
+        for idx, alarm in enumerate(alarms, 1):
+            action_type = str(alarm.get("action_type") or "").strip()
+            if action_type not in _ALLOWED_ALARM_ACTIONS:
+                raise ValueError(f"Alarm action {idx} has an unsupported action.")
+            if action_type in {"email", "webhook"} and not str(alarm.get("action_value") or "").strip():
+                raise ValueError(f"Alarm action {idx} needs a notification profile.")
+
+    def set_rule_enabled(self, rule_id: int, enabled: bool) -> None:
+        db.update_rule(rule_id, enabled=1 if enabled else 0)
 
     def delete_rule(self, rule_id: int) -> None:
         db.delete_rule(rule_id)

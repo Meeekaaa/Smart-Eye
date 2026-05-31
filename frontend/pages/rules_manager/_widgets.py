@@ -459,10 +459,20 @@ class ConditionRow(QFrame):
 
         from ._constants import _get_attributes
 
+        attr_labels = {
+            "identity": "Identity",
+            "gender": "Gender",
+            "object": "Object class",
+            "objects": "Object count",
+        }
         self._attr = QComboBox()
-        self._attr.addItems(_get_attributes())
+        for attr_key in _get_attributes():
+            self._attr.addItem(attr_labels.get(attr_key, attr_key.title()), attr_key)
         if attribute in _get_attributes():
-            self._attr.setCurrentText(attribute)
+            for idx in range(self._attr.count()):
+                if self._attr.itemData(idx) == attribute:
+                    self._attr.setCurrentIndex(idx)
+                    break
         self._attr.setStyleSheet(_combo_ss())
 
         _OPS = [
@@ -500,10 +510,10 @@ class ConditionRow(QFrame):
         self._val_gender = _GenderPicker(value)
         self._val_stack.addWidget(self._val_gender)
 
-        self._attr.currentTextChanged.connect(self._on_attr_changed)
+        self._attr.currentIndexChanged.connect(lambda _idx: self._on_attr_changed(str(self._attr.currentData() or "")))
         from PySide6.QtCore import QTimer
 
-        QTimer.singleShot(0, lambda: self._on_attr_changed(self._attr.currentText()))
+        QTimer.singleShot(0, lambda: self._on_attr_changed(str(self._attr.currentData() or "")))
 
         remove = QPushButton()
         remove.setFixedSize(SIZE_ITEM_SM, SIZE_ITEM_SM)
@@ -532,7 +542,7 @@ class ConditionRow(QFrame):
             self._val_stack.setCurrentIndex(0)
 
     def get_data(self) -> dict:
-        attr = self._attr.currentText()
+        attr = str(self._attr.currentData() or self._attr.currentText())
         if attr == "identity":
             val = self._val_identity.get_value()
         elif attr == "gender":
@@ -837,14 +847,14 @@ class RuleCard(QFrame):
 
         toggle = ToggleSwitch(width=SIZE_CONTROL_MID, height=SIZE_CONTROL_22)
         toggle.setChecked(enabled)
-        toggle.toggled.connect(
-            lambda v, rid=rule["id"]: (
-                db.update_rule(rid, enabled=1 if v else 0),
-                self._on_stop_sounds() if self._on_stop_sounds else None,
-                self._on_toggle_changed() if self._on_toggle_changed else None,
-            )
-        )
+        toggle.toggled.connect(lambda v, rid=rule["id"]: self._toggle_rule(rid, v))
         right.addWidget(toggle)
+
+    def _toggle_rule(self, rule_id: int, enabled: bool) -> None:
+        if self._on_stop_sounds:
+            self._on_stop_sounds()
+        if self._on_toggle_changed:
+            self._on_toggle_changed(rule_id, enabled)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

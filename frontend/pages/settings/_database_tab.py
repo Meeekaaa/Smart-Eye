@@ -754,6 +754,28 @@ class DatabaseTab(QWidget):
         backup_btn.clicked.connect(self._backup_db)
         hl.addWidget(backup_btn)
 
+        purge_btn = QPushButton("Purge Operational Data")
+        purge_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: transparent;
+                color: {_DANGER};
+                border: {SPACE_XXXS}px solid {_DANGER_BORDER_SOFT};
+                border-radius: 8px;
+                font-weight: {FONT_WEIGHT_BOLD};
+                padding: 0 {SPACE_20}px;
+            }}
+            QPushButton:hover {{
+                background: {_DANGER_DIM};
+                color: {_TEXT_ON_ACCENT};
+            }}
+            """
+        )
+        purge_btn.setFixedWidth(SIZE_LABEL_W_180)
+        purge_btn.setToolTip("Admin-confirmed purge for cameras, faces, rules, events, logs, and media indexes.")
+        purge_btn.clicked.connect(self._on_faucet_clicked)
+        hl.addWidget(purge_btn)
+
         hl.addStretch()
         return card
 

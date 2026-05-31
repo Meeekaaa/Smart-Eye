@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import sys
 import sqlite3
 import contextlib
 import json
@@ -670,11 +672,21 @@ QSlider::handle:horizontal {{
         target = os.path.join("data", "snapshots") if key == "snapshots" else self._resolve_saved_clips_folder()
         try:
             os.makedirs(target, exist_ok=True)
-            os.startfile(os.path.abspath(target))  # type: ignore[attr-defined]
+            self._open_path_with_system(os.path.abspath(target))
             self._clip_status.setText(f"Opened folder: {target}")
         except Exception:
             logger.warning("Could not open media folder path=%s", target, exc_info=True)
             self._clip_status.setText("Could not open folder")
+
+    @staticmethod
+    def _open_path_with_system(path: str) -> None:
+        if sys.platform.startswith("win") and hasattr(os, "startfile"):
+            os.startfile(path)  # type: ignore[attr-defined]
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+            return
+        subprocess.Popen(["xdg-open", path])
 
     def _resolve_saved_clips_folder(self) -> str:
         # Prefer the selected clip so folder navigation matches what the user is viewing.
@@ -710,7 +722,7 @@ QSlider::handle:horizontal {{
         if not path or not os.path.exists(path):
             return
         try:
-            os.startfile(path)  # type: ignore[attr-defined]
+            self._open_path_with_system(path)
         except Exception:
             logger.debug("Could not open snapshot with default viewer path=%s", path, exc_info=True)
 
@@ -842,6 +854,7 @@ QSlider::handle:horizontal {{
             self._playback_thread.set_plugins_enabled(state)
             self._playback_thread.set_record_enabled(self._record_toggle.isChecked())
             self._apply_playback_detection_filters()
+        self._sync_record_enabled()
 
     def _on_face_detection_toggled(self, state: bool) -> None:
         try:
@@ -850,6 +863,7 @@ QSlider::handle:horizontal {{
             logger.warning("Failed to persist playback face detection setting", exc_info=True)
         if self._playback_thread:
             self._playback_thread.set_face_detection_enabled(state)
+        self._sync_record_enabled()
 
     @staticmethod
     def _normalize_class_name(value: str) -> str:
@@ -899,12 +913,38 @@ QSlider::handle:horizontal {{
         self._playback_thread.set_disabled_object_classes(self._disabled_playback_classes)
 
     def _on_record_toggled(self, state: bool) -> None:
+        if state and not self._is_record_allowed():
+            self._record_toggle.blockSignals(True)
+            self._record_toggle.setChecked(False)
+            self._record_toggle.blockSignals(False)
+            self._clip_status.setText("Auto-Clip requires Face or Plugins to be enabled.")
+            with contextlib.suppress(sqlite3.Error, OSError, ValueError):
+                db.set_setting("playback_record_enabled", False)
+            return
         try:
             db.set_setting("playback_record_enabled", bool(state))
         except (sqlite3.Error, OSError, ValueError):
             logger.warning("Failed to persist playback record setting", exc_info=True)
         if self._playback_thread:
             self._playback_thread.set_record_enabled(state)
+
+    def _is_record_allowed(self) -> bool:
+        return bool(self._detect_toggle.isChecked() or (self._face_detect_toggle and self._face_detect_toggle.isChecked()))
+
+    def _sync_record_enabled(self) -> None:
+        allowed = self._is_record_allowed()
+        self._record_toggle.setEnabled(allowed)
+        self._record_toggle.setToolTip(
+            "Saves a clip when a rule fires." if allowed else "Enable Face or Plugins before Auto-Clip."
+        )
+        if not allowed and self._record_toggle.isChecked():
+            self._record_toggle.blockSignals(True)
+            self._record_toggle.setChecked(False)
+            self._record_toggle.blockSignals(False)
+            with contextlib.suppress(sqlite3.Error, OSError, ValueError):
+                db.set_setting("playback_record_enabled", False)
+            if self._playback_thread:
+                self._playback_thread.set_record_enabled(False)
 
     def _load_playback_toggle_settings(self) -> None:
         try:
@@ -926,15 +966,17 @@ QSlider::handle:horizontal {{
             except (sqlite3.Error, OSError, ValueError):
                 logger.warning("Failed to normalize playback class filters", exc_info=True)
             self._detect_toggle.setChecked(bool(plugins))
-            self._record_toggle.setChecked(bool(rec))
             if self._face_detect_toggle:
                 self._face_detect_toggle.setChecked(bool(face))
+            self._record_toggle.setChecked(bool(rec and (plugins or face)))
+            self._sync_record_enabled()
         except (sqlite3.Error, OSError, ValueError):
             logger.warning("Failed to load playback toggle settings", exc_info=True)
             self._detect_toggle.setChecked(False)
             self._record_toggle.setChecked(False)
             if self._face_detect_toggle:
                 self._face_detect_toggle.setChecked(True)
+            self._sync_record_enabled()
 
     def _on_finished(self, camera_id=None) -> None:
         self._sync_play_button(paused=True)

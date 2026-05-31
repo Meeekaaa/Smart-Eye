@@ -61,7 +61,7 @@ _ICON_SIZE = QSize(16, 16)
 _TABS: list[tuple[str, str]] = [
     ("General", "settings.png"),
     ("Performance", "dashboard.png"),
-    ("Detection and recogention", "faces.png"),
+    ("Detection & Recognition", "faces.png"),
     ("Accounts", "account.png"),
     ("Database", "folder.png"),
 ]
@@ -119,13 +119,13 @@ class SettingsPage(QWidget):
         row.addWidget(title)
         row.addStretch()
 
-        import_btn = QPushButton("Import…")
+        import_btn = QPushButton("Import...")
         import_btn.setStyleSheet(_PRIMARY_BTN)
         import_btn.setFixedSize(SIZE_BTN_W_100, _BTN_H)
         import_btn.clicked.connect(self._import_settings)
         row.addWidget(import_btn)
 
-        export_btn = QPushButton("Export…")
+        export_btn = QPushButton("Export...")
         export_btn.setStyleSheet(_PRIMARY_BTN)
         export_btn.setFixedSize(SIZE_BTN_W_100, _BTN_H)
         export_btn.clicked.connect(self._export_settings)

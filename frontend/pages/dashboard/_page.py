@@ -41,7 +41,6 @@ from frontend.styles._colors import (
     _ACCENT_HI,
     _DANGER_BG_18,
     _DANGER_BORDER_40_ALT,
-    _SUCCESS,
     _SUCCESS_DIM,
     _DANGER,
     _DANGER_DIM,
@@ -132,14 +131,6 @@ class DashboardPage(QWidget):
         _hl.addWidget(_title)
         _hl.addStretch()
 
-        reload_btn = QPushButton("Reload Plugins")
-        reload_btn.setFixedHeight(SIZE_CONTROL_MD)
-        reload_btn.setMinimumWidth(SIZE_BTN_W_135)
-        reload_btn.setStyleSheet(_PRIMARY_BTN)
-        reload_btn.setToolTip("Reload all detection models without stopping cameras")
-        reload_btn.clicked.connect(self._reload_plugins)
-        _hl.addWidget(reload_btn)
-
         self._start_btn = QPushButton("Start All")
         self._start_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._start_btn.setMinimumWidth(SIZE_BTN_W_135)
@@ -187,11 +178,16 @@ class DashboardPage(QWidget):
 
         icon_path = Path(__file__).resolve().parents[2] / "assets" / "icons" / "cameras.png"
         self._hud_icon = QLabel()
+        pm = QPixmap()
         if icon_path.exists():
             pm = QPixmap(str(icon_path)).scaled(
                 SIZE_CONTROL_18, SIZE_CONTROL_18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
             )
-        self._hud_icon.setPixmap(pm)
+        if not pm.isNull():
+            self._hud_icon.setPixmap(pm)
+        else:
+            self._hud_icon.setText("C")
+            self._hud_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hud_icon.setFixedSize(SIZE_CONTROL_18, SIZE_CONTROL_18)
         self._hud_icon.setStyleSheet("background: transparent;")
         hud_layout.addWidget(self._hud_icon)
@@ -291,10 +287,6 @@ class DashboardPage(QWidget):
 
         self._perf_widget = PerformanceWidget()
         right_panel.addWidget(self._perf_widget)
-        self._providers_timer = QTimer(self)
-        self._providers_timer.setInterval(4000)
-        self._providers_timer.timeout.connect(self._update_providers)
-        self._providers_timer.start()
 
         stats_row = QHBoxLayout()
         stats_row.setSpacing(SPACE_10)
@@ -329,7 +321,7 @@ class DashboardPage(QWidget):
         root.addWidget(self._splitter, stretch=1)
 
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.timeout.connect(self._refresh_stats)
+        self._refresh_timer.timeout.connect(self._refresh_dashboard_summary)
         self._refresh_timer.start(5000)
 
     def on_activated(self):
@@ -338,7 +330,7 @@ class DashboardPage(QWidget):
         if hasattr(self, "_perf_widget"):
             with contextlib.suppress(Exception):
                 self._perf_widget.resume()
-        self._refresh_stats()
+        self._refresh_dashboard_summary()
         self._sync_feeds()
 
     def on_deactivated(self):
@@ -369,19 +361,6 @@ class DashboardPage(QWidget):
         if getattr(self, "_last_auto_grid", None) != size:
             self._last_auto_grid = size
             self._multi_feed.set_grid_size(size)
-
-    def _reload_plugins(self):
-        from backend.pipeline.detector_manager import notify_plugins_changed
-
-        try:
-            notify_plugins_changed()
-            # Refresh live feeds and provider badges so any plugin/provider change is visible.
-            self._sync_feeds()
-            self._update_providers()
-            self._set_hud("Plugins reloaded", _SUCCESS)
-        except Exception:
-            logger.exception("Dashboard plugin reload failed")
-            self._set_hud("Plugin reload failed -- check logs", _DANGER)
 
     def _start_all(self):
         mgr = get_camera_manager()
@@ -605,4 +584,8 @@ class DashboardPage(QWidget):
         self._stat_total.set_value(str(total))
         self._stat_violations.set_value(str(violations))
         self._stat_compliance.set_value(f"{rate:.0f}%")
+
+    def _refresh_dashboard_summary(self):
+        self._refresh_stats()
+        self._update_providers()
 

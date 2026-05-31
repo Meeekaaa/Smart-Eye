@@ -401,20 +401,24 @@ class _EditRuleForm(_BaseRuleForm):
             self._e_name.setFocus()
             return
 
-        self._rules_service.save_rule(
-            self._rule_id,
-            data=dict(
-                name=name,
-                description=self._e_desc.toPlainText().strip(),
-                logic=self._e_logic.currentText(),
-                action=self._e_action.currentText(),
-                priority=self._e_priority.value(),
-                camera_id=self._e_camera.currentData(),
-                enabled=self._e_enabled.isChecked(),
-            ),
-            conditions=self._collect_conditions(),
-            alarms=self._collect_alarms(),
-        )
+        try:
+            self._rules_service.save_rule(
+                self._rule_id,
+                data=dict(
+                    name=name,
+                    description=self._e_desc.toPlainText().strip(),
+                    logic=self._e_logic.currentText(),
+                    action=self._e_action.currentText(),
+                    priority=self._e_priority.value(),
+                    camera_id=self._e_camera.currentData(),
+                    enabled=self._e_enabled.isChecked(),
+                ),
+                conditions=self._collect_conditions(),
+                alarms=self._collect_alarms(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Rule", str(exc))
+            return
         self.saved.emit()
 
 
@@ -440,7 +444,7 @@ class NewRulePanel(_BaseRuleForm):
         lbl.setStyleSheet(f"color:{_TEXT_PRI};")
         bi.addWidget(lbl)
         bi.addStretch()
-        close_x = QPushButton("✕")
+        close_x = QPushButton("X")
         close_x.setFixedSize(SIZE_CONTROL_MD, SIZE_CONTROL_MD)
         close_x.setStyleSheet(_TEXT_BTN_GHOST)
         close_x.clicked.connect(lambda: self.close_requested.emit())
@@ -508,18 +512,22 @@ class NewRulePanel(_BaseRuleForm):
             self._e_name.setFocus()
             return
 
-        rid = self._rules_service.save_rule(
-            None,
-            data=dict(
-                name=name,
-                description=self._e_desc.toPlainText().strip(),
-                logic=self._e_logic.currentText(),
-                action=self._e_action.currentText(),
-                priority=self._e_priority.value(),
-                camera_id=self._e_camera.currentData(),
-                enabled=self._e_enabled.isChecked(),
-            ),
-            conditions=self._collect_conditions(),
-            alarms=self._collect_alarms(),
-        )
+        try:
+            rid = self._rules_service.save_rule(
+                None,
+                data=dict(
+                    name=name,
+                    description=self._e_desc.toPlainText().strip(),
+                    logic=self._e_logic.currentText(),
+                    action=self._e_action.currentText(),
+                    priority=self._e_priority.value(),
+                    camera_id=self._e_camera.currentData(),
+                    enabled=self._e_enabled.isChecked(),
+                ),
+                conditions=self._collect_conditions(),
+                alarms=self._collect_alarms(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Rule", str(exc))
+            return
         self.saved.emit(int(rid))

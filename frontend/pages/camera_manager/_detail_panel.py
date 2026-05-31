@@ -8,7 +8,6 @@ from PySide6.QtGui import QFont, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -28,7 +27,7 @@ from backend.repository import db
 from backend.pipeline.detector_manager import notify_plugins_changed
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
-from frontend.dialogs import apply_popup_theme
+from frontend.services.camera_service import CameraService
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.widgets.action_feedback import make_manager_footer_layout
 from frontend.widgets.toggle_switch import ToggleSwitch
@@ -75,15 +74,10 @@ from frontend.ui_tokens import (
     SPACE_XXXS,
     SIZE_BADGE_H,
     SIZE_BTN_W_80,
-    SIZE_BTN_W_LG,
     SIZE_BTN_W_MD,
     SIZE_BTN_W_SM,
     SIZE_CONTROL_18,
-    SIZE_CONTROL_30,
     SIZE_CONTROL_MD,
-    SIZE_DIALOG_H_LG,
-    SIZE_DIALOG_H_XL,
-    SIZE_DIALOG_W_LG,
     SIZE_ITEM_SM,
     SIZE_LABEL_MIN,
     SIZE_LABEL_W,
@@ -99,7 +93,6 @@ from frontend.ui_tokens import (
 )
 
 from ._constants import (
-    _STYLESHEET,
     _TEXT_BTN_BLUE,
     _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,
@@ -107,11 +100,9 @@ from ._constants import (
     _combo_ss,
     _input_ss,
     _make_sdiv,
-    _make_separator,
     _pill,
     _spin_ss,
     _srow,
-    _PRIMARY_BTN,
 )
 
 logger = logging.getLogger(__name__)
@@ -801,9 +792,9 @@ class CameraDetailPanel(QWidget):
                     gc = def_conf
                 try:
                     if u_en == g_en and abs(u_c - gc) < 1e-4:
-                        db.remove_camera_plugin_class(cam_id, pcls_id)
+                        CameraService().remove_class_override(cam_id, pcls_id)
                     else:
-                        db.assign_camera_plugin_class(cam_id, pcls_id, 1 if u_en else 0, u_c)
+                        CameraService().assign_class_override(cam_id, pcls_id, u_en, u_c)
                 except (sqlite3.Error, OSError, ValueError):
                     logger.exception("Failed to save class idx %s", ci)
 
@@ -1125,211 +1116,3 @@ class CameraDetailPanel(QWidget):
             logger.debug("Failed to log edit open metadata", exc_info=True)
         self._show_edit(self._cam)
 
-    def _open_class_editor(self, cam_id: int, plugin_id: int, plugin_name: str):
-        from PySide6.QtWidgets import QCheckBox, QFormLayout, QScrollArea
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"Classes — {plugin_name}")
-        dlg.setMinimumWidth(SIZE_DIALOG_W_LG)
-        dlg.setMinimumHeight(SIZE_DIALOG_H_LG)
-        dlg.setMaximumHeight(SIZE_DIALOG_H_XL)
-        apply_popup_theme(dlg, _STYLESHEET)
-
-        layout = QVBoxLayout(dlg)
-        layout.setContentsMargins(SPACE_20, SPACE_LG, SPACE_20, SPACE_LG)
-        layout.setSpacing(SPACE_MD)
-
-        title_lbl = QLabel(f"Plugins Classes — {plugin_name}")
-        tf = QFont()
-        safe_set_point_size(tf, FONT_SIZE_SUBHEAD)
-        tf.setBold(True)
-        title_lbl.setFont(tf)
-        title_lbl.setStyleSheet(_CLASS_EDITOR_TITLE_STYLE)
-        layout.addWidget(title_lbl)
-
-        sub_lbl = QLabel("Override enable/confidence per class for this camera. Defaults come from global plugin settings.")
-        sub_lbl.setWordWrap(True)
-        sub_lbl.setStyleSheet(_CLASS_EDITOR_SUB_STYLE)
-        layout.addWidget(sub_lbl)
-        layout.addWidget(_make_separator())
-
-        ctrl_row = QHBoxLayout()
-        ctrl_row.setSpacing(SPACE_SM)
-        enable_all_btn = QPushButton("Enable All")
-        disable_all_btn = QPushButton("Disable All")
-        enable_all_btn.setProperty("class", "secondary")
-        disable_all_btn.setProperty("class", "secondary")
-        enable_all_btn.setFixedHeight(SIZE_CONTROL_30)
-        disable_all_btn.setFixedHeight(SIZE_CONTROL_30)
-        ctrl_row.addWidget(enable_all_btn)
-        ctrl_row.addWidget(disable_all_btn)
-        ctrl_row.addStretch()
-        layout.addLayout(ctrl_row)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet(
-            "background:{bg};border:{bw}px solid {border};border-radius:{radius}px;".format(
-                bg=_BG_RAISED,
-                bw=SPACE_XXXS,
-                border=_BORDER,
-                radius=RADIUS_MD,
-            )
-        )
-        container = QWidget()
-        container.setStyleSheet("background:{bg};".format(bg=_BG_RAISED))
-        cl = QVBoxLayout(container)
-        cl.setContentsMargins(SPACE_MD, SPACE_10, SPACE_MD, SPACE_10)
-        cl.setSpacing(SPACE_6)
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form.setSpacing(SPACE_6)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        cl.addLayout(form)
-        cl.addStretch()
-        scroll.setWidget(container)
-        layout.addWidget(scroll, stretch=1)
-
-        try:
-            classes = db.get_plugin_classes(plugin_id)
-            if not classes:
-                try:
-                    from backend.models import model_loader
-
-                    mdl = model_loader.get_loaded_plugins().get(plugin_id)
-                    class_map = getattr(mdl, "class_names", {}) if mdl else {}
-                    if isinstance(class_map, dict) and class_map:
-                        for class_idx, class_name in class_map.items():
-                            try:
-                                idx_val = int(class_idx)
-                            except (TypeError, ValueError):
-                                continue
-                            name_txt = str(class_name).strip() or str(idx_val)
-                            db.add_plugin_class(plugin_id, idx_val, name_txt, name_txt)
-                        classes = db.get_plugin_classes(plugin_id)
-                except (ImportError, RuntimeError, OSError, ValueError):
-                    logger.debug("Failed to hydrate plugin classes for plugin id=%s", plugin_id, exc_info=True)
-            overrides = {c["class_index"]: c for c in db.get_camera_plugin_classes(cam_id, plugin_id)}
-            plugin_row_data = db.get_plugin(plugin_id)
-            plugin_default_conf = float(plugin_row_data.get("confidence", 0.5)) if plugin_row_data else 0.5
-        except (sqlite3.Error, OSError, ValueError, TypeError):
-            logger.exception("Failed to load classes for plugin %s", plugin_id)
-            classes = []
-            overrides = {}
-            plugin_default_conf = 0.5
-
-        widgets: dict[int, tuple] = {}
-        for cls in classes:
-            idx = int(cls.get("class_index"))
-            cls_name = cls.get("class_name", f"Class {idx}")
-
-            row_w = QWidget()
-            row_w.setStyleSheet("background:transparent;")
-            row_h = QHBoxLayout(row_w)
-            row_h.setContentsMargins(0, SPACE_XXS, 0, SPACE_XXS)
-            row_h.setSpacing(SPACE_10)
-
-            en = QCheckBox()
-            if idx in overrides and overrides[idx].get("enabled") is not None:
-                en.setChecked(bool(overrides[idx]["enabled"]))
-            else:
-                en.setChecked(cls.get("enabled") not in (0, "0", False))
-            row_h.addWidget(en)
-
-            spin = QSpinBox()
-            spin.setRange(0, 100)
-            spin.setFixedWidth(SIZE_BTN_W_SM)
-            spin.setSuffix("%")
-            spin.setStyleSheet(_spin_ss())
-            if idx in overrides and overrides[idx].get("confidence") is not None:
-                raw = float(overrides[idx]["confidence"])
-            elif cls.get("confidence") is not None:
-                raw = float(cls["confidence"])
-            else:
-                raw = plugin_default_conf
-            spin.setValue(int(raw * 100) if raw <= 1.0 else int(raw))
-            row_h.addWidget(spin)
-            row_h.addStretch()
-
-            row_lbl = QLabel(f"{cls_name}:")
-            row_lbl.setStyleSheet(_CLASS_ROW_LABEL_STYLE)
-            form.addRow(row_lbl, row_w)
-            widgets[idx] = (cls, en, spin)
-
-        if not widgets:
-            empty_lbl = QLabel("No classes found for this plugin.")
-            empty_lbl.setStyleSheet(_CLASS_EMPTY_STYLE)
-            empty_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cl.insertWidget(0, empty_lbl)
-
-        def _enable_all():
-            for _, (_, en_cb, _s) in widgets.items():
-                en_cb.setChecked(True)
-
-        def _disable_all():
-            for _, (_, en_cb, _s) in widgets.items():
-                en_cb.setChecked(False)
-
-        enable_all_btn.clicked.connect(_enable_all)
-        disable_all_btn.clicked.connect(_disable_all)
-
-        layout.addWidget(_make_separator())
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(SPACE_SM)
-        btn_row.addStretch()
-
-        save_btn = QPushButton("Save Overrides")
-        save_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        save_btn.setStyleSheet(_PRIMARY_BTN)
-
-        def _do_save_classes():
-            for idx, (cls, en_cb, spin) in widgets.items():
-                plugin_class_id = next((c.get("id") for c in classes if int(c.get("class_index")) == idx), None)
-                if plugin_class_id is None:
-                    continue
-                user_enabled = bool(en_cb.isChecked())
-                raw_val = float(spin.value())
-                user_conf = raw_val / 100.0 if raw_val > 1.0 else raw_val
-
-                global_enabled = cls.get("enabled") not in (0, "0", False)
-                gconf = cls.get("confidence")
-                if gconf is None:
-                    gconf = plugin_default_conf
-                try:
-                    gconf = float(gconf)
-                    if gconf > 1.0:
-                        gconf /= 100.0
-                except (TypeError, ValueError):
-                    gconf = plugin_default_conf
-
-                same_enabled = user_enabled == global_enabled
-                same_conf = abs(user_conf - gconf) < 1e-4
-                try:
-                    if same_enabled and same_conf:
-                        db.remove_camera_plugin_class(cam_id, plugin_class_id)
-                    else:
-                        db.assign_camera_plugin_class(cam_id, plugin_class_id, 1 if user_enabled else 0, user_conf)
-                except (sqlite3.Error, OSError, ValueError):
-                    logger.exception("Failed to save override for class index %s", idx)
-            try:
-                notify_plugins_changed()
-            except (RuntimeError, OSError):
-                logger.warning("Failed to notify plugin changes after class override save", exc_info=True)
-            dlg.accept()
-
-        save_btn.clicked.connect(_do_save_classes)
-        btn_row.addWidget(save_btn)
-
-        cancel_btn = QPushButton("Cancel")
-        cancel_btn.setProperty("class", "secondary")
-        cancel_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        cancel_btn.clicked.connect(dlg.reject)
-        btn_row.addWidget(cancel_btn)
-        layout.addLayout(btn_row)
-
-        dlg.setModal(False)
-        dlg.show()
-        self._classes_dialog = dlg

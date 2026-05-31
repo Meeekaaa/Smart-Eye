@@ -309,6 +309,15 @@ class ModelsPage(QWidget):
         title.setStyleSheet(_TITLE_STYLE)
         hl.addWidget(title)
         hl.addStretch()
+
+        reload_btn = QPushButton("Reload Plugins")
+        reload_btn.setFixedHeight(SIZE_CONTROL_MD)
+        reload_btn.setMinimumWidth(SIZE_BTN_W_160)
+        reload_btn.setStyleSheet(_PRIMARY_BTN)
+        reload_btn.setToolTip("Reload object plugin sessions and provider-backed models")
+        reload_btn.clicked.connect(self._reload_plugins)
+        hl.addWidget(reload_btn)
+
         root.addWidget(header_w)
 
         tab_bar = QWidget()
@@ -340,6 +349,15 @@ class ModelsPage(QWidget):
         self._stack.setCurrentIndex(0 if key == "face" else 1)
         for k, btn in self._tab_btns.items():
             btn.setStyleSheet(_M_TAB_BTN_ACTIVE if k == key else _M_TAB_BTN)
+
+    def _reload_plugins(self) -> None:
+        try:
+            notify_plugins_changed(reload_plugin_sessions=True)
+            self._refresh_plugin_list()
+            self._flash_status("Plugins reloaded")
+        except Exception:
+            logger.exception("Model plugin reload failed")
+            QMessageBox.warning(self, "Reload Failed", "Plugin reload failed. Check the logs for details.")
 
     def _build_face_tab(self) -> QWidget:
         w = QWidget()
@@ -1398,6 +1416,20 @@ class ModelsPage(QWidget):
             QMessageBox.warning(self, "Required Fields", "Name and Weights path are required.")
             return
         mtype = self._ap_type.currentText()
+        ext = os.path.splitext(weight)[1].lower()
+        if not os.path.isfile(weight):
+            QMessageBox.warning(self, "Invalid Weights", "Choose an existing model weights file.")
+            return
+        if mtype == "onnx" and ext != ".onnx":
+            QMessageBox.warning(self, "Invalid Model Type", "The ONNX plugin type requires a .onnx weights file.")
+            return
+        if not self._ap_extracted_classes:
+            QMessageBox.warning(
+                self,
+                "Model Not Inspected",
+                "No object classes were detected. Browse and inspect the weights file before registering the plugin.",
+            )
+            return
         conf = self._ap_conf.value() / 100.0
         try:
             plugin_id = db.add_plugin(name, mtype, weight, conf)

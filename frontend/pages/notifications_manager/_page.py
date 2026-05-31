@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import re
-import time
 
-from PySide6.QtCore import Qt, QSettings, QEvent
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication,
     QHBoxLayout,
     QLayout,
     QLabel,
@@ -119,8 +117,6 @@ class NotificationsConfigPage(QWidget):
         self._active_filter = "all"
         self._tab_buttons: dict = {}
         self._tab_counts: dict = {}
-        self._suppress_popups_until = 0.0
-        QApplication.instance().installEventFilter(self)
         self._build_ui()
 
     def on_activated(self):
@@ -474,27 +470,6 @@ class NotificationsConfigPage(QWidget):
             QToolTip.hideText()
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             pass
-        self._suppress_popups_until = time.monotonic() + 0.5
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Show and time.monotonic() < self._suppress_popups_until:
-            try:
-                if isinstance(obj, QWidget) and obj.isWindow():
-                    main_win = next(
-                        (
-                            w
-                            for w in QApplication.topLevelWidgets()
-                            if w.__class__.__name__ == "MainWindow" or w.windowTitle() == "SmartEye"
-                        ),
-                        None,
-                    )
-                    if obj is not None and obj is not main_win:
-                        obj.hide()
-                        event.ignore()
-                        return True
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                pass
-        return super().eventFilter(obj, event)
 
     def _delete_profile(self, profile_id: int):
         db.delete_notification_profile(profile_id)

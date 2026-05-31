@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import contextlib
 
 from PySide6.QtCore import QPropertyAnimation
 from PySide6.QtWidgets import (
@@ -58,6 +59,24 @@ class DetectionTab(QWidget):
 
         bl.addWidget(_make_sdiv("Face Recognition"))
 
+        self._face_global_toggle = ToggleSwitch()
+        bl.addWidget(
+            _srow(
+                "Global Face Recognition",
+                self._face_global_toggle,
+                hint="Master switch for live face recognition. Per-camera settings still apply.",
+            )
+        )
+
+        self._gender_toggle = ToggleSwitch()
+        bl.addWidget(
+            _srow(
+                "Gender Analytics",
+                self._gender_toggle,
+                hint="Load the optional gender/age sub-model so logs and analytics can include gender.",
+            )
+        )
+
         self._liveness_toggle = ToggleSwitch()
         bl.addWidget(
             _srow(
@@ -91,7 +110,15 @@ class DetectionTab(QWidget):
         return bar
 
     def _save(self) -> None:
+        old_gender = db.get_bool("gender_inference_enabled", False)
+        db.set_setting("face_recognition_enabled_global", "1" if self._face_global_toggle.isChecked() else "0")
+        db.set_setting("gender_inference_enabled", "1" if self._gender_toggle.isChecked() else "0")
         db.set_setting("liveness_check_global", "1" if self._liveness_toggle.isChecked() else "0")
+        if old_gender != self._gender_toggle.isChecked():
+            with contextlib.suppress(Exception):
+                from backend.models import model_loader
+
+                model_loader.reload_face_model()
         if db.get_bool("ui_show_save_popups", False):
             from PySide6.QtWidgets import QMessageBox
 
@@ -119,4 +146,6 @@ class DetectionTab(QWidget):
         anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def load(self) -> None:
+        self._face_global_toggle.setChecked(db.get_bool("face_recognition_enabled_global", True))
+        self._gender_toggle.setChecked(db.get_bool("gender_inference_enabled", False))
         self._liveness_toggle.setChecked(db.get_bool("liveness_check_global", False))

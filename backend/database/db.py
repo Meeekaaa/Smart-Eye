@@ -1331,7 +1331,15 @@ def seed_detection_logs(rows, *, ignore_size_limit: bool = False) -> int:
 
 
 def get_detection_logs(
-    camera_id=None, date_from=None, date_to=None, identity=None, rule_name=None, alarm_level=None, reviewed=None, limit=500
+    camera_id=None,
+    date_from=None,
+    date_to=None,
+    identity=None,
+    rule_name=None,
+    alarm_level=None,
+    reviewed=None,
+    limit=500,
+    offset=0,
 ):
     q = """SELECT dl.*, c.name as camera_name
            FROM detection_logs dl
@@ -1361,8 +1369,9 @@ def get_detection_logs(
     if reviewed is not None:
         q += " AND dl.reviewed=?"
         params.append(reviewed)
-    q += " ORDER BY dl.timestamp DESC LIMIT ?"
-    params.append(limit)
+    q += " ORDER BY dl.timestamp DESC LIMIT ? OFFSET ?"
+    params.append(max(1, int(limit or 1)))
+    params.append(max(0, int(offset or 0)))
     rows = [dict(r) for r in _conn.execute(q, params).fetchall()]
     for row in rows:
         row["detections"] = json.dumps(_normalize_detections_payload(row.get("detections")))

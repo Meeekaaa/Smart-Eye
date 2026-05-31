@@ -23,6 +23,7 @@ from backend.repository import db
 from backend.notifications.email_notifier import test_email
 from backend.notifications.webhook_notifier import test_webhook
 from frontend.app_theme import safe_set_point_size
+from frontend.services.notification_validation import validate_notification_target
 from frontend.styles._hero_header import make_hero_header
 from frontend.styles._banner_styles import make_edit_banner
 from frontend.styles._btn_styles import _SECONDARY_BTN
@@ -631,9 +632,20 @@ class ProfilePanel(QWidget):
         self.suppress_requested.emit()
         name = self._e_name.text().strip()
         target = self._e_endpoint.text().strip()
-        if not name or not target:
+        if not name:
+            QMessageBox.warning(self, "Missing Name", "Notification profile name is required.")
+            self._e_name.setFocus()
+            return
+        if not target:
+            QMessageBox.warning(self, "Missing Target", "Notification profile target is required.")
+            self._e_endpoint.setFocus()
             return
         ptype = self._e_type.currentText()
+        validation_error = validate_notification_target(ptype, target)
+        if validation_error:
+            QMessageBox.warning(self, "Invalid Target", validation_error)
+            self._e_endpoint.setFocus()
+            return
         token = self._e_auth.text().strip() if ptype == "webhook" else ""
         en_val = 1 if self._e_enabled.isChecked() else 0
         saved_id = None
@@ -659,9 +671,18 @@ class ProfilePanel(QWidget):
         self._set_edit_mode(False)
 
     def _test_profile(self, profile: dict):
-        ptype = profile.get("type", "email")
-        target = profile.get("endpoint", "")
-        token = profile.get("auth_token", "")
+        if self._e_type is not None and isValid(self._e_type):
+            ptype = self._e_type.currentText()
+            target = self._e_endpoint.text().strip() if self._e_endpoint is not None and isValid(self._e_endpoint) else ""
+            token = self._e_auth.text().strip() if self._e_auth is not None and isValid(self._e_auth) else ""
+        else:
+            ptype = profile.get("type", "email")
+            target = profile.get("endpoint", "")
+            token = profile.get("auth_token", "")
+        validation_error = validate_notification_target(ptype, target)
+        if validation_error:
+            QMessageBox.warning(self, "Invalid Target", validation_error)
+            return
         try:
             if ptype == "email":
                 ok = test_email(target)

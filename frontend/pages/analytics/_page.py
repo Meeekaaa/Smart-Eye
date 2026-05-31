@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, Qt, QThread, Signal, QSettings
 from PySide6.QtGui import QFont, QTextCharFormat, QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -18,11 +18,10 @@ from PySide6.QtWidgets import (
 )
 from frontend.widgets.no_wheel_combo import NoWheelComboBox
 
-from backend.analytics import report_generator, stats_engine
-from backend.analytics.heatmap_generator import generate_heatmap_from_db, get_generator
 from backend.repository import db
 from frontend.app_theme import page_base_styles, safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.services.analytics_service import AnalyticsService
 from frontend.widgets.chart_widget import ChartWidget
 from frontend.widgets.heatmap_widget import HeatmapWidget
 from frontend.widgets.stat_card_widget import StatCardWidget
@@ -112,10 +111,30 @@ _DATE_ARROW_STYLE = text_style(_TEXT_MUTED, size=FONT_SIZE_LABEL, extra="backgro
 _BG_BASE_STYLE = f"background: {_BG_BASE};"
 
 
+class _PdfExportWorker(QThread):
+    finished_export = Signal(bool, str)
+
+    def __init__(self, path: str, options: dict, parent=None):
+        super().__init__(parent)
+        self._path = path
+        self._options = options
+
+    def run(self):
+        try:
+            AnalyticsService().export_pdf(self._path, **self._options)
+            self.finished_export.emit(True, self._path)
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
+            logger.exception("PDF export failed")
+            self.finished_export.emit(False, str(exc))
+
+
 class AnalyticsPage(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_STYLESHEET)
+        self._analytics_service = AnalyticsService()
+        self._pdf_worker = None
+        self._settings = QSettings("SmartEye", "Analytics")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -391,6 +410,8 @@ class AnalyticsPage(QWidget):
 
     def on_activated(self):
         self._refresh_cameras()
+        self._load_filters()
+        self._refresh_rules()
         self._refresh()
 
     def _refresh_cameras(self):
@@ -418,6 +439,38 @@ class AnalyticsPage(QWidget):
             idx = self._rule_combo.findData(current)
             if idx >= 0:
                 self._rule_combo.setCurrentIndex(idx)
+
+    @staticmethod
+    def _set_combo_data(combo: QComboBox, value) -> None:
+        idx = combo.findData(value)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _load_filters(self) -> None:
+        self._set_combo_data(self._alarm_combo, self._settings.value("filters/alarm_level", None))
+        self._set_combo_data(self._gender_combo, self._settings.value("filters/gender", None))
+        self._set_combo_data(self._time_combo, self._settings.value("filters/time_basis", "Local"))
+        cam_value = self._settings.value("filters/camera_id", None)
+        try:
+            cam_value = int(cam_value) if cam_value not in (None, "", "None") else None
+        except (TypeError, ValueError):
+            cam_value = None
+        self._set_combo_data(self._camera_combo, cam_value)
+        self._refresh_rules()
+        self._set_combo_data(self._rule_combo, self._settings.value("filters/rule_name", None))
+        for key, widget in (("filters/date_from", self._date_from), ("filters/date_to", self._date_to)):
+            saved = str(self._settings.value(key, "") or "")
+            qdate = QDate.fromString(saved, "yyyy-MM-dd")
+            if qdate.isValid():
+                widget.setDate(qdate)
+
+    def _save_filters(self) -> None:
+        self._settings.setValue("filters/alarm_level", self._alarm_combo.currentData())
+        self._settings.setValue("filters/gender", self._gender_combo.currentData())
+        self._settings.setValue("filters/time_basis", self._time_combo.currentData())
+        self._settings.setValue("filters/camera_id", self._camera_combo.currentData())
+        self._settings.setValue("filters/rule_name", self._rule_combo.currentData())
+        self._settings.setValue("filters/date_from", self._date_from.date().toString("yyyy-MM-dd"))
+        self._settings.setValue("filters/date_to", self._date_to.date().toString("yyyy-MM-dd"))
 
     def _update_time_info(self):
         basis = self._time_combo.currentData() or self._time_combo.currentText()
@@ -452,45 +505,37 @@ class AnalyticsPage(QWidget):
         )
 
     def _refresh(self):
+        self._save_filters()
         date_from, date_to, _basis = self._get_time_bounds()
         camera_id = self._camera_combo.currentData()
         rule_name = self._rule_combo.currentData()
         min_alarm_level = self._alarm_combo.currentData()
         gender = self._gender_combo.currentData()
-        summary = stats_engine.get_summary(date_from, date_to, camera_id, min_alarm_level=min_alarm_level, gender=gender)
-        total = summary.get("total_detections", 0) or 0
-        violations = summary.get("violations", 0) or 0
-        compliant = total - violations
-        rate = (compliant / total * 100) if total > 0 else 100.0
-        identified = stats_engine.get_identified_count(
+        model = self._analytics_service.load_view_model(
             date_from=date_from,
             date_to=date_to,
+            time_basis=_basis,
             camera_id=camera_id,
             rule_name=rule_name,
             min_alarm_level=min_alarm_level,
             gender=gender,
         )
+        stats = model["stats"]
+        total = stats["total"]
+        violations = stats["violations"]
+        rate = stats["compliance_rate"]
+        identified = stats["identified"]
         self._stat_total.set_value(str(total))
         self._stat_violations.set_value(str(violations))
         self._stat_compliance.set_value(f"{rate:.0f}%")
         self._stat_faces.set_value(str(identified))
-        gender_rows = stats_engine.get_gender_violations(
-            date_from=date_from,
-            date_to=date_to,
-            camera_id=camera_id,
-            rule_name=rule_name,
-            min_alarm_level=min_alarm_level,
-            gender=gender,
-        )
-        gender_counts = {row.get("gender", "unknown"): int(row.get("count", 0) or 0) for row in gender_rows}
-        self._stat_gendered.set_value(str(gender_counts.get("male", 0) + gender_counts.get("female", 0)))
+        gender_counts = stats["gender_counts"]
+        self._stat_gendered.set_value(str(stats["gendered"]))
         self._gender_breakdown_lbl.setText(
             f"Gender split: Male {gender_counts.get('male', 0)} | Female {gender_counts.get('female', 0)} | Unknown {gender_counts.get('unknown', 0)}"
         )
         self._compliance_chart.clear_data()
-        trend = stats_engine.get_compliance_trend(
-            rule_name=rule_name, date_from=date_from, date_to=date_to, camera_id=camera_id, time_basis=_basis, gender=gender
-        )
+        trend = model["trend"]
         if trend:
             x_idx = list(range(len(trend)))
             values = [float(t["rate"]) for t in trend]
@@ -500,15 +545,7 @@ class AnalyticsPage(QWidget):
             self._compliance_chart.set_empty_state("No compliance data")
 
         self._violation_chart.clear_data()
-        hourly = stats_engine.get_hourly_violation_chart(
-            date_from,
-            date_to,
-            camera_id=camera_id,
-            rule_name=rule_name,
-            min_alarm_level=min_alarm_level,
-            time_basis=_basis,
-            gender=gender,
-        )
+        hourly = model["hourly"]
         if hourly:
             x_idx = list(range(len(hourly)))
             counts = [float(h["count"]) for h in hourly]
@@ -521,7 +558,7 @@ class AnalyticsPage(QWidget):
             self._violation_chart.set_empty_state("No violations in this range")
 
         self._camera_chart.clear_data()
-        cam_data = stats_engine.get_camera_activity_data(date_from, date_to, camera_id=camera_id)
+        cam_data = model["camera_activity"]
         if cam_data:
             cam_idx = list(range(len(cam_data)))
             cam_counts = [float(c["count"]) for c in cam_data]
@@ -530,28 +567,15 @@ class AnalyticsPage(QWidget):
         else:
             self._camera_chart.set_empty_state("No camera activity")
 
-        if camera_id is None:
-            self._heatmap_widget.set_placeholder("Select a camera to view heatmap")
+        if model["heatmap"] is not None:
+            self._heatmap_widget.set_heatmap(model["heatmap"])
         else:
-            gen = get_generator(camera_id)
-            heatmap = gen.generate() if gen.has_data() else None
-            if heatmap is None:
-                heatmap = generate_heatmap_from_db(
-                    camera_id=camera_id,
-                    date_from=date_from,
-                    date_to=date_to,
-                )
-            if heatmap is not None:
-                self._heatmap_widget.set_heatmap(heatmap)
-            else:
-                self._heatmap_widget.set_placeholder("No heatmap data in selected range")
+            self._heatmap_widget.set_placeholder(model["heatmap_placeholder"])
         while self._tv_layout.count():
             item = self._tv_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        top = stats_engine.get_person_violations(
-            date_from, date_to, camera_id=camera_id, rule_name=rule_name, min_alarm_level=min_alarm_level, limit=10, gender=gender
-        )
+        top = model["top_violators"]
         if not top:
             empty_lbl = QLabel("No violators in this range.")
             empty_lbl.setStyleSheet(muted_label_style(size=FONT_SIZE_BODY) + " background: transparent;")
@@ -603,7 +627,7 @@ class AnalyticsPage(QWidget):
         if cam_id is None:
             self._heatmap_widget.set_placeholder("Select a camera to view heatmap")
             return
-        get_generator(cam_id).reset()
+        self._analytics_service.reset_heatmap(cam_id)
         self._heatmap_widget.clear_heatmap()
 
     def _export_pdf(self):
@@ -615,21 +639,28 @@ class AnalyticsPage(QWidget):
         rule_name = self._rule_combo.currentData()
         min_alarm_level = self._alarm_combo.currentData()
         gender = self._gender_combo.currentData()
-        try:
-            report_generator.generate_report(
-                path,
-                date_from,
-                date_to,
-                camera_id,
-                rule_name=rule_name,
-                min_alarm_level=min_alarm_level,
-                time_basis=basis,
-                gender=gender,
-            )
-            QMessageBox.information(self, "PDF Exported", f"Report saved to {path}")
-        except (OSError, ValueError, RuntimeError) as e:
-            QMessageBox.warning(self, "Error", f"Failed to export PDF:\n{e}")
-        except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as e:
-            logger.exception("Unexpected PDF export failure")
-            QMessageBox.warning(self, "Error", f"Failed to export PDF:\n{e}")
+        if self._pdf_worker is not None and self._pdf_worker.isRunning():
+            QMessageBox.information(self, "PDF Export", "A PDF export is already running.")
+            return
+        options = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "camera_id": camera_id,
+            "rule_name": rule_name,
+            "min_alarm_level": min_alarm_level,
+            "time_basis": basis,
+            "gender": gender,
+        }
+        self._pdf_worker = _PdfExportWorker(path, options, self)
+
+        def _done(ok: bool, message: str):
+            self._pdf_worker = None
+            if ok:
+                QMessageBox.information(self, "PDF Exported", f"Report saved to {message}")
+            else:
+                QMessageBox.warning(self, "Error", f"Failed to export PDF:\n{message}")
+
+        self._pdf_worker.finished_export.connect(_done)
+        self._pdf_worker.finished.connect(self._pdf_worker.deleteLater)
+        self._pdf_worker.start()
 

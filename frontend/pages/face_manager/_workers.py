@@ -54,7 +54,7 @@ class EnrollWorker(QThread):
             if model is None or not model.is_loaded:
                 self.done.emit(
                     False,
-                    "Face recognition model is not loaded.\nClick \u2699 Model in the Face Manager header to configure and load it.",
+                    "Face recognition model is not loaded.\nOpen Models > Face Recognition to configure and load it.",
                 )
                 return
 
