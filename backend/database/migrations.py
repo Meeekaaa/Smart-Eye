@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 35
+CURRENT_VERSION = 37
 
 
 def apply(conn):
@@ -81,7 +81,48 @@ def apply(conn):
         _migrate_v34(conn)
     if version < 35:
         _migrate_v35(conn)
+    if version < 36:
+        _migrate_v36(conn)
+    if version < 37:
+        _migrate_v37(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v37(conn):
+    settings = [
+        ("live_infer_interval_max", "2", "int", "Live Inference Interval Max", "performance"),
+        ("bbox_predict_max_frames", "2", "int", "BBox Prediction Max Frames", "performance"),
+        ("bbox_predict_max_stale_sec", "0.20", "float", "BBox Prediction Max Staleness", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='2' WHERE key='live_infer_interval_max' AND value='3'")
+    conn.commit()
+
+
+def _migrate_v36(conn):
+    settings = [
+        ("adaptive_live_infer_interval", "1", "bool", "Adaptive Live Inference Interval", "performance"),
+        ("live_infer_interval_min", "1", "int", "Live Inference Interval Min", "performance"),
+        ("live_infer_interval_max", "2", "int", "Live Inference Interval Max", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
     conn.commit()
 
 
