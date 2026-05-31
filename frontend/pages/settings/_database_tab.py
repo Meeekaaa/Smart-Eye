@@ -102,6 +102,7 @@ from frontend.ui_tokens import (
 
 from ._constants import (
     _FIELD_H,
+    _DANGER_BTN,
     _PRIMARY_BTN,
     _SECONDARY_BTN,
     _combo_ss,
@@ -755,23 +756,8 @@ class DatabaseTab(QWidget):
         hl.addWidget(backup_btn)
 
         purge_btn = QPushButton("Purge Operational Data")
-        purge_btn.setStyleSheet(
-            f"""
-            QPushButton {{
-                background: transparent;
-                color: {_DANGER};
-                border: {SPACE_XXXS}px solid {_DANGER_BORDER_SOFT};
-                border-radius: 8px;
-                font-weight: {FONT_WEIGHT_BOLD};
-                padding: 0 {SPACE_20}px;
-            }}
-            QPushButton:hover {{
-                background: {_DANGER_DIM};
-                color: {_TEXT_ON_ACCENT};
-            }}
-            """
-        )
-        purge_btn.setFixedWidth(SIZE_LABEL_W_180)
+        purge_btn.setStyleSheet(_DANGER_BTN)
+        purge_btn.setMinimumWidth(SIZE_LABEL_W_180)
         purge_btn.setToolTip("Admin-confirmed purge for cameras, faces, rules, events, logs, and media indexes.")
         purge_btn.clicked.connect(self._on_faucet_clicked)
         hl.addWidget(purge_btn)

@@ -149,6 +149,12 @@ def main():
     except Exception:
         pass
     try:
+        from frontend.widgets.button_auto_fit import install_button_auto_fit
+
+        install_button_auto_fit(app)
+    except Exception:
+        pass
+    try:
         from frontend.widgets.combobox_popup import setup_combobox_popup_behavior
 
         setup_combobox_popup_behavior(app)
