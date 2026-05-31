@@ -1,4 +1,5 @@
 import time
+import zlib
 
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
@@ -35,11 +36,23 @@ _CLASS_COLORS = [
     _CLASS_COLOR_6,
     _CLASS_COLOR_7,
     _CLASS_COLOR_8,
+    "#2dd4bf",
+    "#e879f9",
+    "#facc15",
+    "#38bdf8",
+    "#fb7185",
+    "#84cc16",
 ]
 
 
 def _class_color(text: str) -> str:
-    return _CLASS_COLORS[hash(text) % len(_CLASS_COLORS)]
+    key = str(text or "?").strip().lower().encode("utf-8", errors="ignore")
+    return _CLASS_COLORS[zlib.crc32(key) % len(_CLASS_COLORS)]
+
+
+def _normalized_color_hex(value: str | None) -> str:
+    color = QColor(str(value or ""))
+    return color.name().lower() if color.isValid() else ""
 
 
 class VideoWidget(QLabel):
@@ -61,6 +74,8 @@ class VideoWidget(QLabel):
         self._has_infer_fps = False
         self._render_count = 0
         self._last_render_fps_time = time.monotonic()
+        self._bbox_color_assignments: dict[str, str] = {}
+        self._bbox_color_claims: dict[str, str] = {}
 
     def update_frame(self, frame, state=None):
         if state is not None:
@@ -107,6 +122,42 @@ class VideoWidget(QLabel):
         x1, y1, x2, y2 = bbox
         return (int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy))
 
+    def _stable_bbox_color(self, key: str, preferred: str | None = None) -> str:
+        stable_key = str(key or "?").strip().lower()
+        preferred_hex = _normalized_color_hex(preferred)
+        assigned = self._bbox_color_assignments.get(stable_key)
+        if assigned:
+            if not preferred_hex or assigned == preferred_hex:
+                return assigned
+            claimant = self._bbox_color_claims.get(preferred_hex)
+            if claimant in (None, stable_key):
+                if self._bbox_color_claims.get(assigned) == stable_key:
+                    self._bbox_color_claims.pop(assigned, None)
+                self._bbox_color_assignments[stable_key] = preferred_hex
+                self._bbox_color_claims[preferred_hex] = stable_key
+                return preferred_hex
+            return assigned
+
+        if preferred_hex:
+            claimant = self._bbox_color_claims.get(preferred_hex)
+            if claimant in (None, stable_key):
+                self._bbox_color_assignments[stable_key] = preferred_hex
+                self._bbox_color_claims[preferred_hex] = stable_key
+                return preferred_hex
+
+        seed = zlib.crc32(stable_key.encode("utf-8", errors="ignore"))
+        for offset in range(len(_CLASS_COLORS)):
+            color = _normalized_color_hex(_CLASS_COLORS[(seed + offset) % len(_CLASS_COLORS)])
+            claimant = self._bbox_color_claims.get(color)
+            if claimant in (None, stable_key):
+                self._bbox_color_assignments[stable_key] = color
+                self._bbox_color_claims[color] = stable_key
+                return color
+
+        color = _normalized_color_hex(_CLASS_COLORS[seed % len(_CLASS_COLORS)])
+        self._bbox_color_assignments[stable_key] = color
+        return color
+
     def _draw_overlays(self, pixmap: QPixmap, frame_w: int, frame_h: int) -> QPixmap:
         px_w, px_h = pixmap.width(), pixmap.height()
         painter = QPainter(pixmap)
@@ -146,7 +197,8 @@ class VideoWidget(QLabel):
             spoof = face.get("spoof_type")
 
             if spoof:
-                color = _DANGER_DIM
+                base_color = _DANGER_DIM
+                face_status = f"spoof:{spoof}"
                 if spoof == "landmarks_missing":
                     label = "Face landmarks unavailable"
                 elif spoof in ("liveness_model_missing", "passive_unavailable"):
@@ -158,7 +210,8 @@ class VideoWidget(QLabel):
                 else:
                     label = "Verification failed"
             elif pending:
-                color = _WARNING_ORANGE
+                base_color = _WARNING_ORANGE
+                face_status = "pending"
                 if secs > 0:
                     label = f"Verifying face ({secs}s)"
                 else:
@@ -166,28 +219,37 @@ class VideoWidget(QLabel):
             else:
                 if identity:
                     if liveness >= 0.5:
-                        color = _SUCCESS
+                        base_color = _SUCCESS
+                        face_status = "verified"
                         label = f"{identity} ({gender}) {conf:.1%}"
                     else:
-                        color = _WARNING_ORANGE
+                        base_color = _WARNING_ORANGE
+                        face_status = "unverified"
                         label = "Unverified face"
                 else:
-                    color = _DANGER_DIM
+                    base_color = _DANGER_DIM
+                    face_status = "unknown"
                     label = f"Unknown ({gender}) {conf:.1%}" if conf > 0.1 else f"Face ({gender})"
 
+            color = self._stable_bbox_color(f"face:{identity or 'unknown'}:{gender}:{face_status}", base_color)
             draw_box(face["bbox"], color, label)
 
         if not self._state.get("all_faces") and self._state.get("face_bbox"):
             identity = self._state.get("identity", "Unknown")
             gender = (self._state.get("gender") or "unknown").title()
             conf = self._state.get("face_confidence", 0.0)
-            color = _SUCCESS if identity and identity != "Unknown" else _DANGER_DIM
+            base_color = _SUCCESS if identity and identity != "Unknown" else _DANGER_DIM
+            status = "verified" if identity and identity != "Unknown" else "unknown"
+            color = self._stable_bbox_color(f"face:primary:{identity or 'unknown'}:{gender}:{status}", base_color)
             draw_box(self._state["face_bbox"], color, f"{identity or 'Unknown'} ({gender}) {conf:.1%}")
 
         for obj in self._state.get("object_bboxes", []):
             cls = obj.get("class_name", obj.get("plugin_name", "?"))
             conf = obj.get("confidence", 0.0)
-            color = obj.get("bbox_color") or _class_color(cls)
+            plugin_id = obj.get("plugin_id", obj.get("plugin_name", ""))
+            class_id = obj.get("class", obj.get("class_id", ""))
+            color_key = f"object:{plugin_id}:{class_id}:{cls}"
+            color = self._stable_bbox_color(color_key, obj.get("bbox_color") or _class_color(cls))
             draw_box(obj["bbox"], color, f"{cls} {conf:.1%}")
 
         if self._camera_name:

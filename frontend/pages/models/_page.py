@@ -4,6 +4,7 @@ import contextlib
 import logging
 import os
 import sqlite3
+import zlib
 
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QSettings
 from PySide6.QtGui import QColor, QFont, QIcon, QPixmap, QTransform
@@ -198,7 +199,8 @@ def _default_class_color(cls_name: str) -> str:
         _CLASS_COLOR_7,
         _CLASS_COLOR_8,
     ]
-    return _colors[hash(cls_name) % len(_colors)]
+    key = str(cls_name or "?").strip().lower().encode("utf-8", errors="ignore")
+    return _colors[zlib.crc32(key) % len(_colors)]
 
 
 def _class_swatch_style(color_hex: str, *, selected: bool = False) -> str:
