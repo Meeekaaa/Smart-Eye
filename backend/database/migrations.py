@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 30
+CURRENT_VERSION = 35
 
 
 def apply(conn):
@@ -71,7 +71,123 @@ def apply(conn):
         _migrate_v29(conn)
     if version < 30:
         _migrate_v30(conn)
+    if version < 31:
+        _migrate_v31(conn)
+    if version < 32:
+        _migrate_v32(conn)
+    if version < 33:
+        _migrate_v33(conn)
+    if version < 34:
+        _migrate_v34(conn)
+    if version < 35:
+        _migrate_v35(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v35(conn):
+    settings = [
+        ("liveness_pass_recheck_every_n_frames", "1", "int", "Liveness Pass Recheck Stride", "detection"),
+        ("liveness_pass_revoke_threshold", "0.20", "float", "Liveness Pass Revoke Threshold", "detection"),
+        ("liveness_identity_track_min_iou", "0.20", "float", "Liveness Identity Track Minimum IOU", "detection"),
+        ("liveness_failure_log_cooldown_sec", "20.0", "float", "Liveness Failure Log Cooldown", "detection"),
+        ("liveness_block_screen_presentations", "1", "bool", "Block Screen Presentations", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.commit()
+
+
+def _migrate_v34(conn):
+    settings = [
+        ("liveness_passive_real_class_index", "1", "int", "Passive Liveness Real Class Index", "detection"),
+        ("liveness_passive_normalization", "raw", "string", "Passive Liveness Normalization", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute(
+        "UPDATE app_settings SET value=? WHERE key=? AND value=?",
+        ("1", "liveness_passive_real_class_index", "0"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value=? WHERE key=? AND value=?",
+        ("raw", "liveness_passive_normalization", "zero_one"),
+    )
+    conn.commit()
+
+
+def _migrate_v33(conn):
+    settings = [
+        ("liveness_passive_real_class_index", "1", "int", "Passive Liveness Real Class Index", "detection"),
+        ("liveness_passive_color_order", "bgr", "string", "Passive Liveness Color Order", "detection"),
+        ("liveness_passive_crop_scale", "2.7", "float", "Passive Liveness Crop Scale", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute(
+        "UPDATE app_settings SET value=? WHERE key=? AND value=?",
+        ("1", "liveness_passive_real_class_index", "0"),
+    )
+    conn.commit()
+
+
+def _migrate_v32(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("liveness_passive_temporal_fallback", "0", "bool", "Passive Temporal Fallback", "detection"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value=?, type=?, label=?, section=? WHERE key=?",
+        ("0", "bool", "Passive Temporal Fallback", "detection", "liveness_passive_temporal_fallback"),
+    )
+    conn.commit()
+
+
+def _migrate_v31(conn):
+    settings = [
+        ("liveness_mode", "passive", "string", "Liveness Mode", "detection"),
+        ("liveness_passive_model_path", "data/models/liveness.onnx", "string", "Passive Liveness Model Path", "detection"),
+        ("liveness_passive_threshold", "0.70", "float", "Passive Liveness Threshold", "detection"),
+        ("liveness_passive_min_frames", "3", "int", "Passive Liveness Minimum Frames", "detection"),
+        ("liveness_passive_window_sec", "1.2", "float", "Passive Liveness Window", "detection"),
+        ("liveness_passive_every_n_frames", "3", "int", "Passive Liveness Inference Stride", "detection"),
+        ("liveness_passive_real_class_index", "1", "int", "Passive Liveness Real Class Index", "detection"),
+        ("liveness_passive_normalization", "raw", "string", "Passive Liveness Normalization", "detection"),
+        ("liveness_passive_color_order", "bgr", "string", "Passive Liveness Color Order", "detection"),
+        ("liveness_passive_crop_scale", "2.7", "float", "Passive Liveness Crop Scale", "detection"),
+        ("liveness_passive_temporal_fallback", "0", "bool", "Passive Temporal Fallback", "detection"),
+        ("liveness_onnx_provider_preference", "auto", "string", "Liveness ONNX Provider", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
     conn.commit()
 
 

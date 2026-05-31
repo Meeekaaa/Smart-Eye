@@ -63,7 +63,7 @@ class DetectionTab(QWidget):
             _srow(
                 "Liveness / Human Verification",
                 self._liveness_toggle,
-                hint="Require a side-to-side head turn using face landmarks. Adds slight latency.",
+                hint="Verify faces passively; use an ONNX anti-spoof model when configured.",
             )
         )
 

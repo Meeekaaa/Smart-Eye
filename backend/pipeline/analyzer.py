@@ -22,6 +22,12 @@ def _as_float(value, default=0.0):
         return float(default)
 
 
+def _face_liveness_verified(face: dict) -> bool:
+    if face.get("_spoof_type") or face.get("spoof_type") or face.get("_liveness_pending"):
+        return False
+    return _as_float(face.get("liveness", 1.0), 1.0) >= 0.5
+
+
 def _get_plugin_classes_cached(enabled_only=True):
     now = time.time()
     with _CACHE_LOCK:
@@ -94,7 +100,7 @@ def merge_results(detection_results, camera_id):
     ]
     if faces:
         best_face = max(faces, key=lambda f: float(f.get("confidence", 0.0) or 0.0))
-        if best_face.get("identity"):
+        if best_face.get("identity") and _face_liveness_verified(best_face):
             state["identity"] = best_face["identity"]["name"]
             state["face_id"] = best_face["identity"]["id"]
             state["face_confidence"] = float(best_face.get("confidence", 0.0) or 0.0)

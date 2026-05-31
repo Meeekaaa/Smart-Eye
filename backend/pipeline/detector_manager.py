@@ -1052,7 +1052,7 @@ class DetectorManager:
             # break per-face liveness tracks that rely on stable coordinates.
             if faces and self._liveness is not None:
                 try:
-                    self._evaluate_liveness_for_frame(camera_id, faces, frame, frame_idx)
+                    self._evaluate_liveness_for_frame(camera_id, faces, objects, frame, frame_idx)
                 except Exception:
                     logger.debug("Liveness evaluation failed for camera %s", camera_id, exc_info=True)
 
@@ -1089,7 +1089,7 @@ class DetectorManager:
             existing_trackers = list(state.trackers)
         self._identify_faces(camera_id, faces_for_identify, existing_trackers, aggressive_mode, max_identify, frame_for_liveness, frame_idx)
 
-    def _evaluate_liveness_for_frame(self, camera_id, faces, frame_for_liveness, frame_idx):
+    def _evaluate_liveness_for_frame(self, camera_id, faces, objects, frame_for_liveness, frame_idx):
         try:
             for f in faces:
                 try:
@@ -1101,9 +1101,25 @@ class DetectorManager:
                 except Exception:
                     liveness_required = False
 
+                if not liveness_required and self._liveness is not None and f.get("identity"):
+                    try:
+                        block_presentations = config.get("liveness_block_screen_presentations", True)
+                        if isinstance(block_presentations, str):
+                            block_presentations = block_presentations.strip().lower() in ("1", "true", "yes", "on")
+                        if block_presentations and self._liveness.detect_presentation_attack(frame_for_liveness, f, objects=objects):
+                            f["liveness"] = 0.0
+                            f["_spoof_type"] = "screen_presentation"
+                            f.pop("_liveness_pending", None)
+                            f.pop("_liveness_seconds_left", None)
+                            continue
+                    except Exception:
+                        logger.debug("Presentation check failed for camera %s", camera_id, exc_info=True)
+
                 if liveness_required and self._liveness is not None:
                     try:
-                        lval, spoof, pending, seconds_left = self._liveness.evaluate(camera_id, frame_for_liveness, f, frame_idx)
+                        lval, spoof, pending, seconds_left = self._liveness.evaluate(
+                            camera_id, frame_for_liveness, f, frame_idx, objects=objects
+                        )
                         f["liveness"] = lval
                         if spoof:
                             f["_spoof_type"] = spoof
@@ -1116,11 +1132,18 @@ class DetectorManager:
                             except Exception:
                                 f["_liveness_seconds_left"] = 0.0
                         else:
+                            f.pop("_spoof_type", None)
                             f.pop("_liveness_pending", None)
                             f.pop("_liveness_seconds_left", None)
                     except Exception:
+                        f.pop("_spoof_type", None)
+                        f.pop("_liveness_pending", None)
+                        f.pop("_liveness_seconds_left", None)
                         f["liveness"] = 1.0
                 else:
+                    f.pop("_spoof_type", None)
+                    f.pop("_liveness_pending", None)
+                    f.pop("_liveness_seconds_left", None)
                     f["liveness"] = 1.0
         except Exception:
             logger.debug("_evaluate_liveness_for_frame failed", exc_info=True)

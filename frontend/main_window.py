@@ -606,23 +606,37 @@ class MainWindow(QMainWindow):
 
     def _poll_alerts(self):
         try:
-            row = (
+            summary = (
                 self._db.get_conn()
                 .execute(
-                    "SELECT id, camera_id, timestamp, rules_triggered "
-                    "FROM detection_logs WHERE alarm_level>0 AND id>? "
-                    "ORDER BY id DESC LIMIT 1",
+                    "SELECT COUNT(*) AS cnt, MAX(id) AS max_id "
+                    "FROM detection_logs WHERE alarm_level>0 AND id>? ",
                     (self._alert_last_id,),
                 )
                 .fetchone()
             )
+            if not summary or int(summary["cnt"] or 0) <= 0:
+                return
+            count = int(summary["cnt"] or 0)
+            max_id = int(summary["max_id"] or self._alert_last_id)
+            row = (
+                self._db.get_conn()
+                .execute(
+                    "SELECT camera_id, timestamp, rules_triggered "
+                    "FROM detection_logs WHERE id=?",
+                    (max_id,),
+                )
+                .fetchone()
+            )
+            self._alert_last_id = max(self._alert_last_id, max_id)
             if not row:
                 return
-            alert_id, cam_id, ts, rules = row
-            self._alert_last_id = max(self._alert_last_id, int(alert_id))
+            cam_id, ts, rules = row
             subtitle = f"Camera {cam_id} - {ts}"
             if rules:
                 subtitle += f" - {rules}"
+            if count > 1:
+                subtitle = f"{count} new violations. Latest: {subtitle}"
             show_alert(self, "Alert triggered!", subtitle)
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             pass

@@ -128,18 +128,28 @@ class VideoWidget(QLabel):
                 color = _DANGER_DIM
                 if spoof == "landmarks_missing":
                     label = "Face landmarks unavailable"
+                elif spoof in ("liveness_model_missing", "passive_unavailable"):
+                    label = "Liveness model unavailable"
+                elif spoof == "passive_spoof":
+                    label = "Spoof suspected"
+                elif spoof == "screen_presentation":
+                    label = "Screen presentation blocked"
                 else:
                     label = "Verification failed"
             elif pending:
                 color = _WARNING_ORANGE
                 if secs > 0:
-                    label = f"Turn face side to side ({secs}s)"
+                    label = f"Verifying face ({secs}s)"
                 else:
-                    label = "Turn face side to side"
+                    label = "Verifying face"
             else:
                 if identity:
-                    color = _SUCCESS if liveness >= 0.5 else _WARNING_ORANGE
-                    label = f"{identity} ({gender}) {conf:.1%}"
+                    if liveness >= 0.5:
+                        color = _SUCCESS
+                        label = f"{identity} ({gender}) {conf:.1%}"
+                    else:
+                        color = _WARNING_ORANGE
+                        label = "Unverified face"
                 else:
                     color = _DANGER_DIM
                     label = f"Unknown ({gender}) {conf:.1%}" if conf > 0.1 else f"Face ({gender})"
