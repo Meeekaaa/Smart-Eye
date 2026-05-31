@@ -286,6 +286,9 @@ class PlaybackThread(QThread):
 
     def _save_clip(self, fps: float, state: dict | None = None, rules: list[str] | None = None) -> str | None:
         try:
+            if not db.can_persist_events():
+                logging.getLogger(__name__).warning("Playback clip skipped: database size limit is reached")
+                return None
             os.makedirs("data/clips", exist_ok=True)
             fname = os.path.join("data", "clips", f"clip_{int(time.time())}.mp4")
             frames = list(self._frame_buffer)

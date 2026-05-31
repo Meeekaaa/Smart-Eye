@@ -538,15 +538,22 @@ class FaceModel:
                 bbox = [int(b) for b in f.bbox]
                 emb = self._normalize_embedding(f.embedding if hasattr(f, "embedding") else None)
                 gender, gender_conf = _extract_gender_info(f) if gender_enabled else ("unknown", 0.0)
-                results.append(
-                    {
-                        "bbox": bbox,
-                        "embedding": emb,
-                        "det_score": float(f.det_score),
-                        "gender": gender,
-                        "gender_confidence": float(gender_conf),
-                    }
-                )
+                result = {
+                    "bbox": bbox,
+                    "embedding": emb,
+                    "det_score": float(f.det_score),
+                    "gender": gender,
+                    "gender_confidence": float(gender_conf),
+                }
+                kps = getattr(f, "kps", None)
+                if kps is not None:
+                    try:
+                        arr = np.asarray(kps, dtype=np.float32)
+                        if arr.ndim == 2 and arr.shape[0] >= 3 and arr.shape[1] >= 2:
+                            result["landmarks"] = [[float(p[0]), float(p[1])] for p in arr[:, :2]]
+                    except Exception:
+                        pass
+                results.append(result)
             except Exception:
                 continue
         if gender_enabled and faces and not self._gender_diag_logged:

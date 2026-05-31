@@ -41,13 +41,18 @@ class CameraThread(QThread):
         self._recent_inbox_embs: list[tuple[float, np.ndarray]] = []
         self._inbox_enabled = False
         self._suppress_errors = False
-        self._clip_enabled = True
+        self._clip_enabled = False
         self._clip_seconds = 5
         self._clip_buffer: collections.deque[tuple[float, np.ndarray]] = collections.deque()
+        self._clip_buffer_bytes = 0
+        self._clip_max_buffer_bytes = 128 * 1024 * 1024
+        self._clip_buffer_max_dim = 640
         self._last_clip_ts = 0.0
         self._clip_recent: dict[tuple[str, tuple[str, ...]], float] = {}
         self._clip_min_interval = 10.0
         self._clip_repeat_window = 60.0
+        self._ui_frame_interval_sec = 1.0 / 15.0
+        self._last_frame_emit_ts = 0.0
         self._infer_dim = 384
         self._infer_dim_min = 256
         self._infer_dim_max = 512
@@ -252,10 +257,14 @@ class CameraThread(QThread):
             configured_backends = db.get_setting("capture_backends", None)
             twitch_enabled = db.get_bool("twitch_enabled", False)
             self._inbox_enabled = db.get_bool("inbox_capture_enabled", False)
-            self._clip_enabled = db.get_bool("live_clip_enabled", True)
+            self._clip_enabled = db.get_bool("live_clip_enabled", False)
             self._clip_seconds = int(db.get_int("live_clip_seconds", 5) or 5)
+            self._clip_max_buffer_bytes = max(8, int(db.get_int("live_clip_max_buffer_mb", 128) or 128)) * 1024 * 1024
+            self._clip_buffer_max_dim = max(160, int(db.get_int("live_clip_buffer_max_dim", 640) or 640))
             self._clip_min_interval = float(db.get_float("live_clip_min_interval_sec", 10.0) or 10.0)
             self._clip_repeat_window = float(db.get_float("live_clip_repeat_window_sec", 60.0) or 60.0)
+            ui_fps = max(1.0, min(60.0, float(db.get_float("ui_live_render_fps", 15.0) or 15.0)))
+            self._ui_frame_interval_sec = 1.0 / ui_fps
             self._max_predict_frames = max(0, int(db.get_int("bbox_predict_max_frames", 0) or 0))
             self._max_predict_staleness_sec = max(0.01, float(db.get_float("bbox_predict_max_stale_sec", 0.08) or 0.08))
         except Exception:
@@ -264,10 +273,13 @@ class CameraThread(QThread):
             configured_backends = None
             twitch_enabled = False
             self._inbox_enabled = False
-            self._clip_enabled = True
+            self._clip_enabled = False
             self._clip_seconds = 5
+            self._clip_max_buffer_bytes = 128 * 1024 * 1024
+            self._clip_buffer_max_dim = 640
             self._clip_min_interval = 10.0
             self._clip_repeat_window = 60.0
+            self._ui_frame_interval_sec = 1.0 / 15.0
             self._max_predict_frames = 0
             self._max_predict_staleness_sec = 0.08
 
@@ -518,9 +530,7 @@ class CameraThread(QThread):
             inference_updated = False
             if self._clip_enabled:
                 now_buf = time.time()
-                self._clip_buffer.append((now_buf, frame.copy()))
-                while self._clip_buffer and (now_buf - self._clip_buffer[0][0] > max(1, self._clip_seconds)):
-                    self._clip_buffer.popleft()
+                self._append_clip_frame(frame, now_buf)
 
             if pending_future is not None and pending_future.done():
                 try:
@@ -556,7 +566,9 @@ class CameraThread(QThread):
                 self._last_fps_time = now
                 self.fps_updated.emit(self._camera_id, self._fps)
 
-            self.frame_ready.emit(self._camera_id, frame, dict(self._last_state))
+            if now - self._last_frame_emit_ts >= self._ui_frame_interval_sec:
+                self._last_frame_emit_ts = now
+                self.frame_ready.emit(self._camera_id, frame, dict(self._last_state))
 
             elapsed = time.time() - t_start
             sleep_time = display_delay - elapsed
@@ -574,8 +586,35 @@ class CameraThread(QThread):
     def clear_last_state(self):
         self._last_state = {}
 
+    def _prepare_clip_frame(self, frame):
+        max_dim = int(self._clip_buffer_max_dim or 0)
+        if max_dim <= 0:
+            return frame.copy()
+        h, w = frame.shape[:2]
+        largest = max(h, w)
+        if largest <= max_dim:
+            return frame.copy()
+        scale = max_dim / float(largest)
+        return cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))))
+
+    def _append_clip_frame(self, frame, now_ts: float):
+        clip_frame = self._prepare_clip_frame(frame)
+        frame_bytes = int(getattr(clip_frame, "nbytes", 0) or 0)
+        self._clip_buffer.append((now_ts, clip_frame))
+        self._clip_buffer_bytes += frame_bytes
+        max_age = max(1, self._clip_seconds)
+        while self._clip_buffer and (
+            now_ts - self._clip_buffer[0][0] > max_age
+            or self._clip_buffer_bytes > self._clip_max_buffer_bytes
+        ):
+            _, old = self._clip_buffer.popleft()
+            self._clip_buffer_bytes -= int(getattr(old, "nbytes", 0) or 0)
+
     def _save_clip_from_buffer(self) -> str | None:
         try:
+            if not db.can_persist_events():
+                logging.getLogger(__name__).warning("Live clip skipped: database size limit is reached")
+                return None
             os.makedirs("data/clips_live", exist_ok=True)
             frames = list(self._clip_buffer)
             if not frames:

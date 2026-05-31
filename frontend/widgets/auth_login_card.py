@@ -119,7 +119,7 @@ class AuthLoginCard(QFrame):
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(SPACE_SM)
-        self._remember = QCheckBox("Keep me logged in")
+        self._remember = QCheckBox("Remember email")
         self._remember.setStyleSheet(
             f"QCheckBox {{ color: {_TEXT_SEC}; font-size: {FONT_SIZE_BODY}px; background: transparent; border: none; spacing: {SPACE_6}px; }}"
             f"QCheckBox::indicator {{ width: {SIZE_ICON_TINY}px; height: {SIZE_ICON_TINY}px; border-radius: {RADIUS_SM}px; border: {SPACE_XXXS}px solid {_BORDER}; background: {_BG_OVERLAY}; }}"

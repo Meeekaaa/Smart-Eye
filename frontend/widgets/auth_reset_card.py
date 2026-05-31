@@ -47,7 +47,6 @@ from frontend.ui_tokens import (
 class AuthResetCard(QFrame):
     load_requested = Signal(str)
     submit_requested = Signal(str, list, str, str)
-    admin_login_requested = Signal(str)
     back = Signal()
 
     def __init__(self, parent=None):
@@ -80,7 +79,7 @@ class AuthResetCard(QFrame):
 
         form.addSpacing(SPACE_6)
 
-        subtitle = QLabel("Answer your security questions to reset your password, or use the admin code.")
+        subtitle = QLabel("Answer your security questions to reset your password.")
         subtitle.setStyleSheet(
             "QLabel {{ {style} background: transparent; border: none; }}".format(style=text_style(_TEXT_SEC, size=FONT_SIZE_BODY))
         )
@@ -109,24 +108,6 @@ class AuthResetCard(QFrame):
         self._email.setFixedHeight(SIZE_CONTROL_MID)
         self._email.setStyleSheet(_AUTH_INPUT_LG)
         form.addWidget(self._email)
-
-        form.addSpacing(SPACE_20)
-
-        admin_code_label = QLabel("Admins code")
-        admin_code_label.setStyleSheet(
-            f"QLabel {{ color: {_TEXT_SEC}; background: transparent; border: none; font-size: {FONT_SIZE_BODY}px; font-weight: {FONT_WEIGHT_SEMIBOLD}; }}"
-        )
-        form.addWidget(admin_code_label)
-
-        form.addSpacing(SPACE_6)
-
-        self._admin_code = QLineEdit()
-        self._admin_code.setPlaceholderText("Enter admin code")
-        self._admin_code.setEchoMode(QLineEdit.EchoMode.Password)
-        self._admin_code.setFixedHeight(SIZE_CONTROL_MID)
-        self._admin_code.setStyleSheet(_AUTH_INPUT_LG)
-        attach_password_visibility_toggle(self._admin_code)
-        form.addWidget(self._admin_code)
 
         form.addSpacing(SPACE_20)
 
@@ -191,12 +172,6 @@ class AuthResetCard(QFrame):
         load_btn.clicked.connect(lambda: self.load_requested.emit(self.reset_email()))
         button_row.addWidget(load_btn)
 
-        admin_btn = QPushButton("Admin sign in")
-        admin_btn.setFixedHeight(SIZE_CONTROL_MID)
-        admin_btn.setStyleSheet(_SECONDARY_BTN)
-        admin_btn.clicked.connect(lambda: self.admin_login_requested.emit(self.admin_code()))
-        button_row.addWidget(admin_btn)
-
         back_btn = QPushButton("Back to login")
         back_btn.setFixedHeight(SIZE_CONTROL_MID)
         back_btn.setStyleSheet(_SECONDARY_BTN)
@@ -228,9 +203,6 @@ class AuthResetCard(QFrame):
     def set_email(self, val: str):
         self._email.setText(val or "")
 
-    def admin_code(self) -> str:
-        return self._admin_code.text().strip()
-
     def answers(self) -> list[str]:
         return [a.text() for a in self._a_edits]
 
@@ -243,7 +215,6 @@ class AuthResetCard(QFrame):
     def clear_answers(self):
         for a in self._a_edits:
             a.clear()
-        self._admin_code.clear()
         self._new_pw.clear()
         self._new_pw2.clear()
 

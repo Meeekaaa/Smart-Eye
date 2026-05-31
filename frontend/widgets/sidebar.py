@@ -422,7 +422,7 @@ class SidebarWidget(QWidget):
             QWidget {{
                 background: {bg0};
             }}
-        """.format(bg0=_BG_SIDEBAR, bg1=_BG_SIDEBAR_ALT))
+        """.format(bg0=_BG_SIDEBAR))
 
         self._width_anim = QPropertyAnimation(self, b"minimumWidth", self)
         self._width_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -633,7 +633,7 @@ class SidebarWidget(QWidget):
             QWidget {{
                 background: {bg0};
             }}
-        """.format(bg0=_BG_SIDEBAR, bg1=_BG_SIDEBAR_ALT)
+        """.format(bg0=_BG_SIDEBAR)
         )
 
         if self._top_divider is not None:

@@ -52,12 +52,13 @@ def _writer_loop():
     global _writer_conn, _writer_thread_id
     _writer_thread_id = threading.get_ident()
     _writer_conn = _create_conn()
-    while not _writer_stop.is_set():
+    while True:
         try:
             item = _write_queue.get(timeout=0.2)
         except queue.Empty:
             continue
         if item is None:
+            _write_queue.task_done()
             break
         kind = item[0]
         result_q = item[-1]
@@ -97,6 +98,8 @@ def _ensure_writer():
 
 
 def _queue_write_item(item):
+    if _writer_stop.is_set():
+        raise RuntimeError("Database writer is closed")
     try:
         _write_queue.put(item, timeout=2.0)
         return
@@ -186,13 +189,14 @@ def get_conn():
 
 
 def close():
+    _writer_stop.set()
+    wait_for_writer_idle(timeout_sec=5.0)
     conn = getattr(_conn_local, "conn", None)
     if conn:
         conn.close()
         _conn_local.conn = None
-    _writer_stop.set()
     try:
-        _write_queue.put_nowait(None)
+        _write_queue.put(None, timeout=2.0)
     except Exception:
         pass
     try:
@@ -1139,6 +1143,36 @@ def _normalize_gender_value(value) -> str:
     return "unknown"
 
 
+def _identity_to_text(identity) -> str:
+    if identity is None:
+        return ""
+    if isinstance(identity, dict):
+        for key in ("name", "identity", "email", "id"):
+            value = identity.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+    return str(identity).strip()
+
+
+def _json_safe_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v) for k, v in value.items() if k != "embedding"}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(v) for v in value]
+    if isinstance(value, bytes):
+        return "<bytes>"
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        try:
+            return _json_safe_value(tolist())
+        except Exception:
+            return str(value)
+    return str(value)
+
+
 def _normalize_detections_payload(payload):
     data = payload
     if isinstance(payload, str):
@@ -1148,17 +1182,44 @@ def _normalize_detections_payload(payload):
             data = {}
     if not isinstance(data, dict):
         data = {}
-    data = dict(data)
+    data = _json_safe_value(dict(data))
     data["gender"] = _normalize_gender_value(data.get("gender"))
     return data
 
 
+def _db_size_bytes() -> int:
+    if not _DB_PATH:
+        return 0
+    total = 0
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        path = f"{_DB_PATH}{suffix}"
+        with contextlib.suppress(OSError):
+            total += os.path.getsize(path)
+    return total
+
+
+def is_db_size_over_limit() -> bool:
+    try:
+        limit = int(get_setting("db_size_limit_bytes", 0) or 0)
+    except Exception:
+        limit = 0
+    return limit > 0 and _db_size_bytes() >= limit
+
+
+def can_persist_events() -> bool:
+    return not is_db_size_over_limit()
+
+
 def add_detection_log(camera_id, identity=None, face_confidence=0.0, detections=None, rules_triggered=None, alarm_level=0, snapshot_path=""):
+    if is_db_size_over_limit():
+        logging.getLogger(__name__).warning("Skipping detection log: database size limit reached")
+        return None
     det_norm = _normalize_detections_payload(detections) if isinstance(detections, dict) else _normalize_detections_payload(detections)
     det_json = json.dumps(det_norm)
     rules_json = json.dumps(rules_triggered) if isinstance(rules_triggered, list) else rules_triggered
     gender_norm = _normalize_gender_value(det_norm.get("gender"))
-    ident_text = (identity or "").strip().lower()
+    identity = _identity_to_text(identity)
+    ident_text = identity.lower()
     has_identity = 1 if ident_text and ident_text != "unknown" else 0
     cur = _write_execute(
         "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, has_identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1338,6 +1399,9 @@ def get_all_settings(section=None):
 
 
 def add_clip(path: str, source: str, camera_id: int | None, ts: int | None, face_label: str | None, rules, object_types):
+    if is_db_size_over_limit():
+        logging.getLogger(__name__).warning("Skipping clip metadata: database size limit reached")
+        return
     try:
         rules_json = json.dumps(rules or [])
         obj_json = json.dumps(object_types or [])
@@ -1378,6 +1442,7 @@ def get_clips(
     face_label: str | None = None,
     object_type: str | None = None,
     rule_triggered: str | None = None,
+    limit: int | None = 500,
 ):
     q = "SELECT * FROM clips WHERE 1=1"
     params = []
@@ -1400,8 +1465,20 @@ def get_clips(
         q += " AND object_types LIKE ?"
         params.append(f"%{object_type}%")
     q += " ORDER BY ts DESC"
+    if limit is not None:
+        q += " LIMIT ?"
+        params.append(max(1, int(limit or 500)))
     rows = _conn.execute(q, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_clip_paths(limit: int | None = 1000):
+    q = "SELECT path FROM clips ORDER BY ts DESC"
+    params = []
+    if limit is not None:
+        q += " LIMIT ?"
+        params.append(max(1, int(limit or 1000)))
+    return [r["path"] for r in _conn.execute(q, params).fetchall()]
 
 
 def get_settings_sections():
@@ -1501,7 +1578,9 @@ def get_hourly_violations(
 def get_violations_by_person(
     date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, limit=20, gender=None
 ):
-    q = """SELECT identity, gender_norm
+    q = """SELECT identity,
+           COALESCE(MAX(CASE WHEN gender_norm != 'unknown' THEN gender_norm END), 'unknown') as gender,
+           COUNT(*) as count
            FROM detection_logs
            WHERE identity IS NOT NULL AND identity != ''"""
     params = []
@@ -1525,23 +1604,13 @@ def get_violations_by_person(
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
-    rows = [dict(r) for r in _conn.execute(q, params).fetchall()]
-    agg = {}
-    for row in rows:
-        identity = row.get("identity") or ""
-        if not identity:
-            continue
-        entry = agg.setdefault(identity, {"identity": identity, "count": 0, "gender": "unknown"})
-        entry["count"] += 1
-        g = _normalize_gender_value(row.get("gender_norm"))
-        if entry["gender"] == "unknown" and g != "unknown":
-            entry["gender"] = g
-    result = sorted(agg.values(), key=lambda x: x["count"], reverse=True)
-    return result[: max(1, int(limit or 20))]
+    q += " GROUP BY identity ORDER BY count DESC LIMIT ?"
+    params.append(max(1, int(limit or 20)))
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
 
 
 def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, gender=None):
-    q = "SELECT gender_norm FROM detection_logs WHERE 1=1"
+    q = "SELECT gender_norm, COUNT(*) as count FROM detection_logs WHERE 1=1"
     params = []
     if min_alarm_level is not None:
         q += " AND alarm_level>=?"
@@ -1564,10 +1633,11 @@ def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
 
+    q += " GROUP BY gender_norm"
     counts = {"male": 0, "female": 0, "unknown": 0}
     for row in _conn.execute(q, params).fetchall():
         g = _normalize_gender_value(row["gender_norm"])
-        counts[g] = counts.get(g, 0) + 1
+        counts[g] = counts.get(g, 0) + int(row["count"] or 0)
     return [
         {"gender": "male", "count": counts["male"]},
         {"gender": "female", "count": counts["female"]},

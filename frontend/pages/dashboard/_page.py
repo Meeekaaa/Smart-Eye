@@ -1,5 +1,6 @@
 ﻿import contextlib
 import logging
+import time
 import warnings
 from pathlib import Path
 
@@ -100,6 +101,12 @@ class DashboardPage(QWidget):
         self._state_labels = {}
         self._camera_plugin_names = {}
         self._last_hud_counts_refresh = 0.0
+        self._last_render_ts: dict[int, float] = {}
+        try:
+            render_fps = float(db.get_float("ui_live_render_fps", 15.0) or 15.0)
+        except Exception:
+            render_fps = 15.0
+        self._render_interval_sec = 1.0 / max(1.0, min(60.0, render_fps))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -448,7 +455,11 @@ class DashboardPage(QWidget):
             with contextlib.suppress(Exception):
                 thread.error_occurred.disconnect(self._on_error)
     def _on_frame(self, camera_id, frame, state):
-        self._multi_feed.update_frame(camera_id, frame, state)
+        now = time.monotonic()
+        last_render = self._last_render_ts.get(camera_id, 0.0)
+        if now - last_render >= self._render_interval_sec:
+            self._last_render_ts[camera_id] = now
+            self._multi_feed.update_frame(camera_id, frame, state)
         self._update_hud(camera_id, state)
         self._update_alarms(state)
         self._perf_widget.update_inference(

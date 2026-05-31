@@ -126,16 +126,16 @@ class VideoWidget(QLabel):
 
             if spoof:
                 color = _DANGER_DIM
-                if spoof == "turn_failed":
-                    label = "Verification failed"
+                if spoof == "landmarks_missing":
+                    label = "Face landmarks unavailable"
                 else:
                     label = "Verification failed"
             elif pending:
                 color = _WARNING_ORANGE
                 if secs > 0:
-                    label = f"Turn face left then right ({secs}s)"
+                    label = f"Turn face side to side ({secs}s)"
                 else:
-                    label = "Turn face left then right"
+                    label = "Turn face side to side"
             else:
                 if identity:
                     color = _SUCCESS if liveness >= 0.5 else _WARNING_ORANGE

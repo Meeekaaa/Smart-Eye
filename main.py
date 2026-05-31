@@ -187,6 +187,12 @@ def main():
         get_camera_manager().stop_all()
     except Exception:
         pass
+    try:
+        from backend.pipeline.alarm_handler import close_handler
+
+        close_handler()
+    except Exception:
+        pass
     db.close()
     sys.exit(exit_code)
 

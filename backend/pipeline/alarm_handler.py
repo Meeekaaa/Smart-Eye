@@ -38,8 +38,13 @@ class AlarmHandler:
 
     def close(self):
         self._stop_event.set()
+        deadline = time.time() + 3.0
+        while time.time() < deadline:
+            if getattr(self._task_queue, "unfinished_tasks", 0) <= 0:
+                break
+            time.sleep(0.05)
         try:
-            self._task_queue.put_nowait(None)
+            self._task_queue.put(None, timeout=1.0)
         except Exception:
             pass
         try:
@@ -59,6 +64,7 @@ class AlarmHandler:
 
             try:
                 self._task_queue.get_nowait()
+                self._task_queue.task_done()
             except Exception:
                 pass
             try:
@@ -67,12 +73,13 @@ class AlarmHandler:
                 self._log.warning("Alarm worker queue full; dropping task kind=%s", (task or {}).get("kind"))
 
     def _worker_loop(self):
-        while not self._stop_event.is_set():
+        while True:
             try:
                 task = self._task_queue.get(timeout=0.25)
             except queue.Empty:
                 continue
             if task is None:
+                self._task_queue.task_done()
                 break
             try:
                 kind = task.get("kind")
@@ -83,6 +90,8 @@ class AlarmHandler:
                     self._write_detection_log(task["rule"], task["level"], task["state"], task.get("frame"))
             except Exception:
                 self._log.exception("Alarm worker task failed")
+            finally:
+                self._task_queue.task_done()
 
     def handle_alarms(self, triggered_rules, escalation_levels, state, frame=None):
         now = time.time()
@@ -171,6 +180,9 @@ class AlarmHandler:
         return executed
 
     def _write_detection_log(self, rule, level, state, frame):
+        if not db.can_persist_events():
+            self._log.warning("Detection log skipped because database size limit is reached")
+            return
         snapshot_path = ""
         if frame is not None:
             snapshot_path = save_snapshot(
@@ -366,3 +378,13 @@ def stop_all_sounds():
     with_logging = getattr(handler, "_stop_alarm", None)
     if callable(with_logging):
         handler._stop_alarm()
+
+
+def close_handler():
+    global _instance
+    if _instance is None:
+        return
+    close_fn = getattr(_instance, "close", None)
+    if callable(close_fn):
+        close_fn()
+    _instance = None

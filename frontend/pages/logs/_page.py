@@ -205,11 +205,11 @@ QHeaderView::section {{
     font-size: {FONT_SIZE_CAPTION}px;
 }}
 """
-_DETAIL_TABS_STYLE = f"""
-QWidget#DetailsStackWrap {{
+_DETAIL_TABS_STYLE = """
+QWidget#DetailsStackWrap {
     border: none;
     background: transparent;
-}}
+}
 """
 
 

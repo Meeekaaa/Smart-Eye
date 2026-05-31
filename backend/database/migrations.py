@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 28
+CURRENT_VERSION = 30
 
 
 def apply(conn):
@@ -67,7 +67,56 @@ def apply(conn):
         _migrate_v27(conn)
     if version < 28:
         _migrate_v28(conn)
+    if version < 29:
+        _migrate_v29(conn)
+    if version < 30:
+        _migrate_v30(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v30(conn):
+    settings = [
+        ("liveness_challenge_seconds", "8.0", "float", "Liveness Challenge Seconds", "detection"),
+        ("liveness_yaw_threshold", "0.16", "float", "Liveness Head Turn Threshold", "detection"),
+        ("liveness_pose_frames", "2", "int", "Liveness Consecutive Pose Frames", "detection"),
+        ("liveness_pass_ttl_sec", "30.0", "float", "Liveness Pass Time-To-Live", "detection"),
+        ("liveness_failure_hold_sec", "2.0", "float", "Liveness Failure Hold", "detection"),
+        ("liveness_allow_bbox_fallback", "0", "bool", "Allow BBox Liveness Fallback", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.commit()
+
+
+def _migrate_v29(conn):
+    settings = [
+        ("remember_login", "0", "bool", "Remember Email", "security"),
+        ("remember_email", "", "string", "Remembered Email", "security"),
+        ("live_clip_enabled", "0", "bool", "Save Live Alarm Clips", "performance"),
+        ("live_clip_seconds", "5", "int", "Live Clip Seconds", "performance"),
+        ("live_clip_max_buffer_mb", "128", "int", "Live Clip Buffer Limit (MB)", "performance"),
+        ("live_clip_buffer_max_dim", "640", "int", "Live Clip Buffer Max Dimension", "performance"),
+        ("ui_live_render_fps", "15", "float", "Live View Render FPS", "performance"),
+        ("inference_future_timeout_sec", "2.0", "float", "Inference Timeout (seconds)", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("DELETE FROM app_settings WHERE key='remember_account_id'")
     conn.commit()
 
 
@@ -151,9 +200,8 @@ def _migrate_v24(conn):
 
 def _migrate_v23(conn):
     settings = [
-        ("remember_login", "0", "bool", "Keep Me Logged In", "security"),
+        ("remember_login", "0", "bool", "Remember Email", "security"),
         ("remember_email", "", "string", "Remembered Email", "security"),
-        ("remember_account_id", "", "string", "Remembered Account Id", "security"),
     ]
     for key, value, vtype, label, section in settings:
         conn.execute(

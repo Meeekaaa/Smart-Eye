@@ -205,6 +205,12 @@ INSERT OR IGNORE INTO app_settings VALUES ('snapshot_on_alarm', '1', 'bool', 'Sa
 INSERT OR IGNORE INTO app_settings VALUES ('face_similarity_threshold', '0.45', 'float', 'Face Match Threshold', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('face_recognition_enabled_global', '1', 'bool', 'Enable Face Recognition', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_check_global', '0', 'bool', 'Require Liveness Globally', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('liveness_challenge_seconds', '8.0', 'float', 'Liveness Challenge Seconds', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('liveness_yaw_threshold', '0.16', 'float', 'Liveness Head Turn Threshold', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('liveness_pose_frames', '2', 'int', 'Liveness Consecutive Pose Frames', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('liveness_pass_ttl_sec', '30.0', 'float', 'Liveness Pass Time-To-Live', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('liveness_failure_hold_sec', '2.0', 'float', 'Liveness Failure Hold', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('liveness_allow_bbox_fallback', '0', 'bool', 'Allow BBox Liveness Fallback', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('log_retention_days', '90', 'int', 'Log Retention (days)', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('db_size_limit_bytes', '0', 'int', 'DB Size Limit (bytes)', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('report_logo_path', '', 'string', 'Report Logo Path', 'reports');
@@ -227,6 +233,12 @@ INSERT OR IGNORE INTO app_settings VALUES ('ui_pause_inactive_tabs', '1', 'bool'
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_on_leave', '1', 'bool', 'Unload heavy tabs on leave', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_idle_min', '5', 'int', 'Unload idle tabs after (min)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('auto_pause_live_when_idle', '0', 'bool', 'Auto-stop live cameras when idle', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_clip_enabled', '0', 'bool', 'Save Live Alarm Clips', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_clip_seconds', '5', 'int', 'Live Clip Seconds', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_clip_max_buffer_mb', '128', 'int', 'Live Clip Buffer Limit (MB)', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_clip_buffer_max_dim', '640', 'int', 'Live Clip Buffer Max Dimension', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('ui_live_render_fps', '15', 'float', 'Live View Render FPS', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('inference_future_timeout_sec', '2.0', 'float', 'Inference Timeout (seconds)', 'performance');
 CREATE INDEX IF NOT EXISTS idx_detection_logs_timestamp ON detection_logs (timestamp);
 CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_id ON detection_logs (camera_id);
 CREATE INDEX IF NOT EXISTS idx_known_faces_name ON known_faces (name);

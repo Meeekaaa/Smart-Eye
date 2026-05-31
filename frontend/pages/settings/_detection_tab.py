@@ -63,7 +63,7 @@ class DetectionTab(QWidget):
             _srow(
                 "Liveness / Human Verification",
                 self._liveness_toggle,
-                hint="Reject photo/screen attacks. Requires a supported model; adds slight latency.",
+                hint="Require a side-to-side head turn using face landmarks. Adds slight latency.",
             )
         )
 

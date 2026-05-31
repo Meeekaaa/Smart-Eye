@@ -4,7 +4,7 @@ import os
 import sys
 import threading
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 
 import cv2
 
@@ -32,6 +32,16 @@ def _scale_bbox_up(bbox, scale):
         return bbox
     s = 1.0 / scale
     return [int(bbox[0] * s), int(bbox[1] * s), int(bbox[2] * s), int(bbox[3] * s)]
+
+
+def _scale_points_up(points, scale):
+    if not points:
+        return None
+    try:
+        s = 1.0 / float(scale or 1.0)
+        return [[float(p[0]) * s, float(p[1]) * s] for p in points if len(p) >= 2]
+    except Exception:
+        return None
 
 
 def _iou(a, b):
@@ -474,25 +484,27 @@ class DetectorManager:
         results = []
         for face in faces:
             face["bbox"] = _scale_bbox_up(face["bbox"], scale)
+            landmarks = _scale_points_up(face.get("landmarks"), scale)
             try:
                 x1, y1, x2, y2 = face["bbox"]
                 if (x2 - x1) < min_face_size or (y2 - y1) < min_face_size:
                     continue
             except Exception:
                 continue
-            results.append(
-                {
-                    "bbox": face["bbox"],
-                    "det_score": face.get("det_score", 1.0),
-                    "identity": None,
-                    # Keep confidence numeric for downstream ranking/aggregation paths.
-                    "confidence": float(face.get("det_score", 0.0) or 0.0),
-                    "embedding": face.get("embedding"),
-                    "liveness": None,
-                    "gender": face.get("gender", "unknown"),
-                    "gender_confidence": face.get("gender_confidence", 0.0),
-                }
-            )
+            result = {
+                "bbox": face["bbox"],
+                "det_score": face.get("det_score", 1.0),
+                "identity": None,
+                # Keep confidence numeric for downstream ranking/aggregation paths.
+                "confidence": float(face.get("det_score", 0.0) or 0.0),
+                "embedding": face.get("embedding"),
+                "liveness": None,
+                "gender": face.get("gender", "unknown"),
+                "gender_confidence": face.get("gender_confidence", 0.0),
+            }
+            if landmarks:
+                result["landmarks"] = landmarks
+            results.append(result)
         return results, (time.time() - t0) * 1000
 
     def _run_plugin(self, pid, small, scale, camera_id):
@@ -593,10 +605,21 @@ class DetectorManager:
 
     def _collect_futures(self, futures):
         faces, objects, face_ms, obj_ms = [], [], 0.0, 0.0
-        timeout_s = 30.0
+        if not futures:
+            return faces, objects, face_ms, obj_ms
+        try:
+            timeout_s = max(0.2, float(config.get("inference_future_timeout_sec", 2.0) or 2.0))
+        except Exception:
+            timeout_s = 2.0
+        done, not_done = wait(list(futures.values()), timeout=timeout_s)
+        for fut in not_done:
+            fut.cancel()
         for key, fut in futures.items():
+            if fut not in done:
+                logger.warning("Inference future timed out for key %s after %.2fs", key, timeout_s)
+                continue
             try:
-                data, ms = fut.result(timeout=timeout_s)
+                data, ms = fut.result(timeout=0)
                 if key == "faces":
                     faces = data
                     face_ms = ms
@@ -732,6 +755,7 @@ class DetectorManager:
                     "confidence": f.get("confidence"),
                     "det_score": f.get("det_score"),
                     "embedding": f.get("embedding"),
+                    "landmarks": f.get("landmarks"),
                     "liveness": f.get("liveness", 1.0),
                     "gender": f.get("gender", "unknown"),
                     "gender_confidence": f.get("gender_confidence", 0.0),

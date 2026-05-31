@@ -688,7 +688,7 @@ QSlider::handle:horizontal {{
 
         # Fall back to indexed clips (ordered by newest ts in DB).
         try:
-            for row in db.get_clips() or []:
+            for row in db.get_clips(limit=25) or []:
                 clip_path = str(row.get("path") or "")
                 if clip_path and os.path.isfile(clip_path):
                     return os.path.dirname(os.path.abspath(clip_path))
@@ -1347,14 +1347,22 @@ QSlider::handle:horizontal {{
 
     def _sync_clips_index(self) -> None:
         try:
-            existing = {row.get("path") for row in db.get_clips() or []}
+            existing = set(db.get_clip_paths(limit=1000) or [])
         except (sqlite3.Error, OSError, TypeError, ValueError):
             logger.warning("Failed to read existing clips index", exc_info=True)
             existing = set()
         for folder in ("data/clips_live", "data/clips"):
             if not os.path.isdir(folder):
                 continue
-            for name in os.listdir(folder):
+            try:
+                names = sorted(
+                    os.listdir(folder),
+                    key=lambda n, f=folder: os.path.getmtime(os.path.join(f, n)),
+                    reverse=True,
+                )[:1000]
+            except OSError:
+                names = []
+            for name in names:
                 if not name.lower().endswith((".mp4", ".avi", ".mkv", ".mov", ".wmv")):
                     continue
                 path = os.path.join(folder, name)
@@ -1388,6 +1396,7 @@ QSlider::handle:horizontal {{
                 face_label=filters["face_label"],
                 object_type=filters["object_type"],
                 rule_triggered=filters["rule_triggered"],
+                limit=500,
             )
         except (sqlite3.Error, OSError, TypeError, ValueError):
             logger.warning("Failed to load filtered clips", exc_info=True)

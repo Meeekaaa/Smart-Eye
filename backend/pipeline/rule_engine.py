@@ -1,3 +1,6 @@
+import threading
+import time
+
 from backend.repository import db
 from backend.models.face_model import normalize_gender
 
@@ -6,8 +9,6 @@ def _normalize_attr_value(attr, value):
     if attr == "gender":
         return normalize_gender(value)
     return value
-import threading
-import time
 
 
 def _normalize_operator(op: str) -> str:
