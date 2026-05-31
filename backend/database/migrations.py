@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 38
+CURRENT_VERSION = 39
 
 
 def apply(conn):
@@ -87,7 +87,31 @@ def apply(conn):
         _migrate_v37(conn)
     if version < 38:
         _migrate_v38(conn)
+    if version < 39:
+        _migrate_v39(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v39(conn):
+    row = conn.execute("SELECT value FROM app_settings WHERE key='insightface_allowed_modules'").fetchone()
+    gender_row = conn.execute("SELECT value FROM app_settings WHERE key='gender_inference_enabled'").fetchone()
+    gender_enabled = str(gender_row[0]).strip().lower() in ("1", "true", "yes", "on") if gender_row else False
+    existing = []
+    if row and row[0]:
+        try:
+            parsed = json.loads(row[0])
+            if isinstance(parsed, list):
+                existing = [str(v) for v in parsed]
+        except Exception:
+            existing = []
+    modules = ["detection", "recognition"]
+    if gender_enabled and ("genderage" in existing or not row):
+        modules.append("genderage")
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("insightface_allowed_modules", json.dumps(modules), "json", "Allowed InsightFace Modules", "detection"),
+    )
     conn.commit()
 
 

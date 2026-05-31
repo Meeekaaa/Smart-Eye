@@ -77,6 +77,18 @@ def load_face_model_async(model_dir: str = "") -> FaceModel:
     return _load_face_model_internal(model_dir=model_dir, async_load=True)
 
 
+def reload_face_model(model_dir: str = "", cpu_only: bool = False) -> FaceModel:
+    global _face_model
+    with _face_model_lock:
+        if _face_model is None:
+            _face_model = FaceModel()
+        model = _face_model
+
+    providers = ["CPUExecutionProvider"] if cpu_only else None
+    model.reload(model_dir, providers_override=providers)
+    return model
+
+
 def _load_face_model_internal(model_dir: str = "", async_load: bool = False) -> FaceModel:
     global _face_model
     with _face_model_lock:

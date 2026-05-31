@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressDialog,
     QPushButton,
     QVBoxLayout,
@@ -42,6 +43,9 @@ from ._constants import (
     _SUCCESS,
     _TEXT_SEC,
 )
+
+
+_FM_LOAD_WORKERS: set = set()
 
 
 class _ModelPanelMixin:
@@ -204,34 +208,70 @@ class _ModelPanelMixin:
                     break
             self._fm_buffalo_combo.blockSignals(False)
 
-    def _fm_on_model_changed(self, idx):
-        sel = self._fm_buffalo_combo.itemData(idx) or "buffalo_l"
-        db.set_setting("insightface_model_name", sel)
-        self._fm_model_status.setText(f"\u25cf Switching to {sel}\u2026")
-        self._fm_model_status.setStyleSheet(
-            f"color: {_WARNING_ORANGE}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_SEMIBOLD};"
-        )
+    def _fm_select_model_key(self, model_name: str) -> None:
+        self._fm_buffalo_combo.blockSignals(True)
+        for i in range(self._fm_buffalo_combo.count()):
+            if self._fm_buffalo_combo.itemData(i) == model_name:
+                self._fm_buffalo_combo.setCurrentIndex(i)
+                break
+        self._fm_buffalo_combo.blockSignals(False)
 
+    def _fm_confirm_download_if_missing(self, model_name: str) -> bool | None:
+        from backend.models.face_model import is_insightface_model_installed
+
+        model_path = self._fm_model_path.text().strip()
+        if is_insightface_model_installed(model_name, model_path):
+            return False
+
+        answer = QMessageBox.question(
+            self,
+            "Download InsightFace Model?",
+            f"{model_name} is not installed locally.\n\nDownload this model pack now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self._fm_model_status.setText(f"\u25cf {model_name} is not installed. Download canceled.")
+            self._fm_model_status.setStyleSheet(
+                f"color: {_WARNING_ORANGE}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_SEMIBOLD};"
+            )
+            return None
+        return True
+
+    def _fm_on_model_changed(self, idx):
+        previous = db.get_setting("insightface_model_name", "buffalo_l") or "buffalo_l"
+        sel = self._fm_buffalo_combo.itemData(idx) or "buffalo_l"
+        download_missing = self._fm_confirm_download_if_missing(sel)
+        if download_missing is None:
+            self._fm_select_model_key(previous)
+            return
+        db.set_setting("insightface_model_name", sel)
         if hasattr(self, "_fm_reload_timer") and self._fm_reload_timer is not None:
             self._fm_reload_timer.stop()
-        self._fm_reload_timer = QTimer(self)
-        self._fm_reload_timer.setSingleShot(True)
-        self._fm_reload_timer.timeout.connect(self._fm_force_reload)
-        self._fm_reload_timer.start(250)
+        self._fm_force_reload(download_missing=download_missing)
 
     def _fm_save_only(self):
-        db.set_setting("insightface_model_dir", self._fm_model_path.text().strip())
-        db.set_setting("insightface_model_name", self._fm_buffalo_combo.currentData() or "buffalo_l")
+        self._fm_save_and_reload()
 
     def _fm_save_and_reload(self):
         db.set_setting("insightface_model_dir", self._fm_model_path.text().strip())
-        db.set_setting("insightface_model_name", self._fm_buffalo_combo.currentData() or "buffalo_l")
-        self._fm_force_reload()
+        selected = self._fm_buffalo_combo.currentData() or "buffalo_l"
+        download_missing = self._fm_confirm_download_if_missing(selected)
+        if download_missing is None:
+            return
+        db.set_setting("insightface_model_name", selected)
+        self._fm_force_reload(download_missing=download_missing)
 
-    def _fm_force_reload(self):
+    def _fm_force_reload(self, download_missing: bool = False):
         db.set_setting("insightface_model_dir", self._fm_model_path.text().strip())
         db.set_setting("insightface_model_name", self._fm_buffalo_combo.currentData() or "buffalo_l")
-        self._fm_reload_model(force=True)
+        self._fm_reload_model(force=True, download_missing=download_missing)
+
+    def _fm_mark_restart_pending(self, message: str) -> None:
+        self._fm_model_status.setText(f"\u25cf {message}")
+        self._fm_model_status.setStyleSheet(
+            f"color: {_WARNING_ORANGE}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_SEMIBOLD};"
+        )
 
     def _fm_browse_path(self):
         folder = QFileDialog.getExistingDirectory(self, "Select InsightFace Model Root Folder", self._fm_model_path.text() or ".")
@@ -317,7 +357,7 @@ class _ModelPanelMixin:
             self._fm_btn_spin_timer = None
         self._fm_save_reload_btn.setIcon(QIcon())
 
-    def _fm_reload_model(self, force: bool = False):
+    def _fm_reload_model(self, force: bool = False, download_missing: bool = False):
         if getattr(self, "_fm_reload_busy", False):
             return
         self._fm_reload_busy = True
@@ -329,13 +369,14 @@ class _ModelPanelMixin:
 
         path = self._fm_model_path.text().strip() or ""
         self._start_fm_header_spinner()
-        self._fm_model_status.setText("Loading — please wait…")
+        self._fm_model_status.setText("Downloading and applying…" if download_missing else "Applying — cameras will pause…")
         self._fm_model_status.setStyleSheet(
             f"color: {_WARNING_ORANGE}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_SEMIBOLD};"
         )
         self._fm_save_reload_btn.setEnabled(False)
-        self._fm_save_reload_btn.setText("Saving…")
+        self._fm_save_reload_btn.setText("Applying…")
         self._start_fm_button_spinner()
+        model_name = self._fm_buffalo_combo.currentData() or "buffalo_l"
 
         from PySide6.QtCore import QThread, Signal as _Signal
 
@@ -344,31 +385,48 @@ class _ModelPanelMixin:
         class _FMLoadWorker(QThread):
             finished = _Signal(bool, str)
 
-            def __init__(self, p, force_reload):
+            def __init__(self, p, force_reload, name, do_download):
                 super().__init__()
                 self._path = p
                 self._force = force_reload
+                self._name = name
+                self._do_download = do_download
 
             def run(self):
+                active_ids = []
+                mgr = None
                 try:
-                    from backend.models.model_loader import get_face_model
+                    from backend.models.face_model import download_insightface_model_pack, is_insightface_model_installed
+                    from backend.models import model_loader
+                    from backend.camera.camera_manager import get_camera_manager
 
-                    fm = get_face_model()
-                    if self._force:
-                        fm.reload(self._path)
-                    else:
-                        fm.load(self._path)
+                    mgr = get_camera_manager()
+                    active_ids = mgr.get_active_ids()
+                    if active_ids:
+                        mgr.stop_all()
+                    if self._do_download and not is_insightface_model_installed(self._name, self._path):
+                        download_insightface_model_pack(self._name, self._path)
+                    fm = model_loader.reload_face_model(self._path, cpu_only=True)
                     self.finished.emit(fm.is_loaded, "")
-                except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
+                except Exception as exc:
                     self.finished.emit(False, str(exc))
+                finally:
+                    if mgr is not None:
+                        for cid in active_ids:
+                            try:
+                                mgr.start_camera(cid)
+                            except Exception:
+                                pass
 
-        worker = _FMLoadWorker(path, _force)
+        worker = _FMLoadWorker(path, _force, model_name, download_missing)
+        _FM_LOAD_WORKERS.add(worker)
         self._fm_load_worker = worker
 
         if hasattr(self, "_fm_progress") and self._fm_progress is not None:
             with contextlib.suppress(Exception):
                 self._fm_progress.close()
-        self._fm_progress = QProgressDialog("Loading InsightFace model\u2026", None, 0, 0, self)
+        progress_label = "Downloading and applying InsightFace model\u2026" if download_missing else "Applying InsightFace model\u2026"
+        self._fm_progress = QProgressDialog(progress_label, None, 0, 0, self)
         self._fm_progress.setWindowTitle("Loading")
         self._apply_loading_icon(self._fm_progress)
         self._fm_progress.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -390,11 +448,7 @@ class _ModelPanelMixin:
 
                 fm = get_face_model()
                 providers_str = ", ".join(p.replace("ExecutionProvider", "") for p in (fm.providers_used or [])) or "CPU"
-                note = getattr(fm, "last_load_error", None)
-                label = f"\u25cf {fm.model_name} \u2014 {providers_str}"
-                if note:
-                    label += f" (note: {note})"
-                self._fm_model_status.setText(label)
+                self._fm_model_status.setText(f"\u25cf {model_name} applied for this session - {providers_str}")
                 self._fm_model_status.setStyleSheet(
                     f"color: {_SUCCESS}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_SEMIBOLD};"
                 )
@@ -406,6 +460,8 @@ class _ModelPanelMixin:
                 )
 
         worker.finished.connect(_on_done)
+        worker.finished.connect(lambda *_args, w=worker: _FM_LOAD_WORKERS.discard(w))
+        worker.finished.connect(worker.deleteLater)
         worker.start()
 
     def _fm_detect_gpu(self):

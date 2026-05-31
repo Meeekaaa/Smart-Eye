@@ -124,6 +124,7 @@ from frontend.ui_tokens import (
 )
 
 logger = logging.getLogger(__name__)
+_FM_LOAD_WORKERS: set = set()
 _STYLESHEET = (
     page_base_styles(FONT_SIZE_BODY)
     + f"""
@@ -839,10 +840,14 @@ class ModelsPage(QWidget):
             rl.addWidget(status_txt)
 
             toggle = ToggleSwitch(active_color=_ACCENT)
-            toggle.setChecked(sm["enabled"])
-            toggle.setFixedWidth(SIZE_BTN_W_SM)
             _task = str(sm.get("task") or "")
-            if _task not in ("detection", "recognition", "genderage"):
+            required = bool(sm.get("required")) or _task in ("detection", "recognition")
+            toggle.setChecked(True if required else sm["enabled"])
+            toggle.setFixedWidth(SIZE_BTN_W_SM)
+            if required:
+                toggle.setEnabled(False)
+                toggle.setToolTip("Required by InsightFace; detection and recognition cannot be disabled")
+            elif _task not in ("detection", "recognition", "genderage"):
                 toggle.setEnabled(False)
                 toggle.setToolTip("This sub-model cannot be toggled from here")
             else:
@@ -860,6 +865,10 @@ class ModelsPage(QWidget):
     def _on_submodel_toggled(self, task: str, enabled: bool) -> None:
         from backend.models.face_model import get_allowed_modules, set_allowed_modules
 
+        if task in ("detection", "recognition"):
+            self._refresh_submodels()
+            return
+
         mods = get_allowed_modules()
         if enabled and task not in mods:
             mods.append(task)
@@ -867,38 +876,72 @@ class ModelsPage(QWidget):
             mods.remove(task)
         set_allowed_modules(mods)
         if not self._fm_reload_busy:
-            self._fm_force_reload()
+            self._fm_force_reload(download_missing=False)
+
+    def _fm_select_model_key(self, model_name: str) -> None:
+        self._fm_buffalo_combo.blockSignals(True)
+        for i in range(self._fm_buffalo_combo.count()):
+            if self._fm_buffalo_combo.itemData(i) == model_name:
+                self._fm_buffalo_combo.setCurrentIndex(i)
+                break
+        self._fm_buffalo_combo.blockSignals(False)
+
+    def _fm_confirm_download_if_missing(self, model_name: str) -> bool | None:
+        from backend.models.face_model import is_insightface_model_installed
+
+        model_path = self._fm_model_path.text().strip()
+        if is_insightface_model_installed(model_name, model_path):
+            return False
+
+        answer = QMessageBox.question(
+            self,
+            "Download InsightFace Model?",
+            f"{model_name} is not installed locally.\n\nDownload this model pack now?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self._fm_status_dot.setStyleSheet(_DOT_WARN_STYLE)
+            self._fm_model_status.setText(f"{model_name} is not installed. Download canceled.")
+            self._fm_model_status.setStyleSheet(_STATUS_WARN_STYLE)
+            return None
+        return True
 
     def _fm_on_model_changed(self, idx: int) -> None:
+        previous = db.get_setting("insightface_model_name", "buffalo_l") or "buffalo_l"
         sel = self._fm_buffalo_combo.itemData(idx) or "buffalo_l"
+        download_missing = self._fm_confirm_download_if_missing(sel)
+        if download_missing is None:
+            self._fm_select_model_key(previous)
+            return
         db.set_setting("insightface_model_name", sel)
-        self._fm_status_dot.setStyleSheet(_DOT_WARN_STYLE)
-        self._fm_model_status.setText(f"Switching to {sel}…")
-        self._fm_model_status.setStyleSheet(_STATUS_WARN_STYLE)
         if self._fm_reload_timer:
             self._fm_reload_timer.stop()
-        self._fm_reload_timer = QTimer(self)
-        self._fm_reload_timer.setSingleShot(True)
-        self._fm_reload_timer.timeout.connect(self._fm_force_reload)
-        self._fm_reload_timer.start(300)
+        self._fm_force_reload(download_missing=download_missing)
 
     def _fm_save_only(self) -> None:
         db.set_setting("insightface_model_dir", self._fm_model_path.text().strip())
         db.set_setting("insightface_model_name", self._fm_buffalo_combo.currentData() or "buffalo_l")
-        if db.get_bool("ui_show_save_popups", False):
-            QMessageBox.information(self, "Saved", "Model settings saved.")
-        else:
-            self._flash_status("Saved")
+        self._fm_force_reload(download_missing=False)
 
     def _fm_save_and_reload(self) -> None:
         db.set_setting("insightface_model_dir", self._fm_model_path.text().strip())
-        db.set_setting("insightface_model_name", self._fm_buffalo_combo.currentData() or "buffalo_l")
-        self._fm_force_reload()
+        selected = self._fm_buffalo_combo.currentData() or "buffalo_l"
+        download_missing = self._fm_confirm_download_if_missing(selected)
+        if download_missing is None:
+            return
+        db.set_setting("insightface_model_name", selected)
+        self._fm_force_reload(download_missing=download_missing)
 
-    def _fm_force_reload(self) -> None:
+    def _fm_force_reload(self, download_missing: bool = False) -> None:
         db.set_setting("insightface_model_dir", self._fm_model_path.text().strip())
         db.set_setting("insightface_model_name", self._fm_buffalo_combo.currentData() or "buffalo_l")
-        self._fm_reload_model(force=True)
+        self._fm_reload_model(force=True, download_missing=download_missing)
+
+    def _fm_mark_restart_pending(self, message: str) -> None:
+        self._fm_status_dot.setStyleSheet(_DOT_WARN_STYLE)
+        self._fm_model_status.setText(message)
+        self._fm_model_status.setStyleSheet(_STATUS_WARN_STYLE)
 
     def _fm_browse_path(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Select InsightFace Model Root Folder", self._fm_model_path.text() or ".")
@@ -1014,7 +1057,7 @@ class ModelsPage(QWidget):
         if layout is not None:
             layout.insertWidget(0, icon_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
 
-    def _fm_reload_model(self, force: bool = False) -> None:
+    def _fm_reload_model(self, force: bool = False, download_missing: bool = False) -> None:
         if self._fm_reload_busy:
             return
         self._fm_reload_busy = True
@@ -1024,40 +1067,63 @@ class ModelsPage(QWidget):
             old.wait(800)
         path = self._fm_model_path.text().strip()
         self._start_fm_status_spinner()
-        self._fm_model_status.setText("Loading model — please wait…")
+        self._fm_model_status.setText(
+            "Downloading and applying model — cameras will pause…"
+            if download_missing
+            else "Applying model — cameras will pause…"
+        )
         self._fm_model_status.setStyleSheet(_STATUS_WARN_STYLE)
         self._fm_save_reload_btn.setEnabled(False)
-        self._fm_save_reload_btn.setText("Loading...")
+        self._fm_save_reload_btn.setText("Applying...")
         self._start_fm_button_spinner()
+        model_name = self._fm_buffalo_combo.currentData() or "buffalo_l"
 
         from PySide6.QtCore import QThread, Signal as _Sig
 
         class _Worker(QThread):
             finished = _Sig(bool, str)
 
-            def __init__(self, p: str, fr: bool, parent=None):
+            def __init__(self, p: str, fr: bool, name: str, do_download: bool, parent=None):
                 super().__init__(parent)
-                self._p, self._fr = p, fr
+                self._p = p
+                self._fr = fr
+                self._name = name
+                self._do_download = do_download
 
             def run(self):
+                active_ids = []
+                mgr = None
                 try:
-                    from backend.models.model_loader import get_face_model
+                    from backend.models.face_model import download_insightface_model_pack, is_insightface_model_installed
+                    from backend.models import model_loader
+                    from backend.camera.camera_manager import get_camera_manager
 
-                    fm = get_face_model()
-                    if self._fr:
-                        fm.reload(self._p)
-                    else:
-                        fm.load(self._p)
+                    mgr = get_camera_manager()
+                    active_ids = mgr.get_active_ids()
+                    if active_ids:
+                        mgr.stop_all()
+                    if self._do_download and not is_insightface_model_installed(self._name, self._p):
+                        download_insightface_model_pack(self._name, self._p)
+                    fm = model_loader.reload_face_model(self._p, cpu_only=True)
                     self.finished.emit(fm.is_loaded, "")
-                except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
+                except Exception as exc:
                     self.finished.emit(False, str(exc))
+                finally:
+                    if mgr is not None:
+                        for cid in active_ids:
+                            try:
+                                mgr.start_camera(cid)
+                            except Exception:
+                                pass
 
-        worker = _Worker(path, force, self)
+        worker = _Worker(path, force, model_name, download_missing)
+        _FM_LOAD_WORKERS.add(worker)
         self._fm_load_worker = worker
         if self._fm_progress:
             with contextlib.suppress(Exception):
                 self._fm_progress.close()
-        self._fm_progress = QProgressDialog("Loading InsightFace model…", None, 0, 0, self)
+        progress_label = "Downloading and applying InsightFace model…" if download_missing else "Applying InsightFace model…"
+        self._fm_progress = QProgressDialog(progress_label, None, 0, 0, self)
         self._fm_progress.setWindowTitle("Loading")
         self._apply_loading_icon(self._fm_progress)
         apply_popup_theme(
@@ -1090,12 +1156,8 @@ class ModelsPage(QWidget):
 
                 fm = get_face_model()
                 providers_str = ", ".join(p.replace("ExecutionProvider", "") for p in (fm.providers_used or [])) or "CPU"
-                note = getattr(fm, "last_load_error", None)
-                label = f"{fm.model_name} — {providers_str}"
-                if note:
-                    label += f"  (note: {note})"
                 self._fm_status_dot.setStyleSheet(_DOT_OK_STYLE)
-                self._fm_model_status.setText(label)
+                self._fm_model_status.setText(f"{model_name} applied for this session — {providers_str}")
                 self._fm_model_status.setStyleSheet(_STATUS_OK_STYLE)
                 self._refresh_submodels()
             else:
@@ -1105,6 +1167,7 @@ class ModelsPage(QWidget):
                 self._fm_model_status.setStyleSheet(_STATUS_ERR_STYLE)
 
         worker.finished.connect(_on_done)
+        worker.finished.connect(lambda *_args, w=worker: _FM_LOAD_WORKERS.discard(w))
         worker.finished.connect(worker.deleteLater)
         worker.start()
 
