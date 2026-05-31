@@ -59,56 +59,6 @@ def _iou(a, b):
         return 0.0
 
 
-def _smooth_bbox(prev, curr, alpha=0.6, max_scale_change=0.12, alpha_size=None, as_float=False):
-    try:
-        if not prev or not curr:
-            return curr
-
-        px1, py1, px2, py2 = [float(x) for x in prev]
-
-        cx1, cy1, cx2, cy2 = [float(x) for x in curr]
-
-        pcx = (px1 + px2) / 2.0
-        pcy = (py1 + py2) / 2.0
-        pw = max(1.0, px2 - px1)
-        ph = max(1.0, py2 - py1)
-
-        ccx = (cx1 + cx2) / 2.0
-        ccy = (cy1 + cy2) / 2.0
-        cw = max(1.0, cx2 - cx1)
-        ch = max(1.0, cy2 - cy1)
-
-        alpha_pos = float(alpha)
-        if alpha_size is None:
-            size_alpha = min(0.82, max(0.55, alpha_pos * 0.78))
-        else:
-            size_alpha = max(0.0, min(1.0, float(alpha_size)))
-
-        ncx = alpha_pos * ccx + (1.0 - alpha_pos) * pcx
-        ncy = alpha_pos * ccy + (1.0 - alpha_pos) * pcy
-
-        nw = size_alpha * cw + (1.0 - size_alpha) * pw
-        nh = size_alpha * ch + (1.0 - size_alpha) * ph
-
-        min_w = pw * (1.0 - max_scale_change)
-        max_w = pw * (1.0 + max_scale_change)
-        min_h = ph * (1.0 - max_scale_change)
-        max_h = ph * (1.0 + max_scale_change)
-        nw = max(min_w, min(max_w, nw))
-        nh = max(min_h, min(max_h, nh))
-
-        nx1 = ncx - nw / 2.0
-        ny1 = ncy - nh / 2.0
-        nx2 = ncx + nw / 2.0
-        ny2 = ncy + nh / 2.0
-
-        if as_float:
-            return [nx1, ny1, nx2, ny2]
-        return [int(round(nx1)), int(round(ny1)), int(round(nx2)), int(round(ny2))]
-    except Exception:
-        return curr
-
-
 def _as_float(value, default=0.0):
     try:
         return float(value)
@@ -161,44 +111,8 @@ def _face_linked_to_person_box(person_box, face_box):
     return face_inside or face_overlap >= 0.35
 
 
-def _bbox_scale_delta(prev, curr):
-    try:
-        pw = max(1.0, float(prev[2] - prev[0]))
-        ph = max(1.0, float(prev[3] - prev[1]))
-        cw = max(1.0, float(curr[2] - curr[0]))
-        ch = max(1.0, float(curr[3] - curr[1]))
-        return max(abs(cw - pw) / pw, abs(ch - ph) / ph)
-    except Exception:
-        return 1.0
-
-
 def _box_from_center(cx, cy, w, h):
     return [float(cx) - (float(w) / 2.0), float(cy) - (float(h) / 2.0), float(cx) + (float(w) / 2.0), float(cy) + (float(h) / 2.0)]
-
-
-def _landmark_motion_center(landmarks):
-    if not landmarks:
-        return None
-    pts = []
-    for p in landmarks:
-        try:
-            if len(p) >= 2:
-                pts.append((float(p[0]), float(p[1])))
-        except Exception:
-            continue
-    if len(pts) < 3:
-        return None
-
-    if len(pts) >= 5:
-        left_eye, right_eye, nose, mouth_l, mouth_r = pts[:5]
-        eye_mid = ((left_eye[0] + right_eye[0]) / 2.0, (left_eye[1] + right_eye[1]) / 2.0)
-        mouth_mid = ((mouth_l[0] + mouth_r[0]) / 2.0, (mouth_l[1] + mouth_r[1]) / 2.0)
-        return (
-            (eye_mid[0] * 0.30) + (nose[0] * 0.45) + (mouth_mid[0] * 0.25),
-            (eye_mid[1] * 0.30) + (nose[1] * 0.45) + (mouth_mid[1] * 0.25),
-        )
-
-    return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
 
 
 def _shift_bbox(box, dx, dy):
@@ -236,79 +150,6 @@ def _match_score(prev_box, curr_box, vx=0.0, vy=0.0):
 
     score = (iou_best * 1.15) - (rel_dist * 0.12)
     return score, iou_best, rel_dist
-
-
-def _adaptive_smoothing_alpha(rel_move, match_iou):
-    rel = _as_float(rel_move)
-    iou = _as_float(match_iou)
-
-    if rel >= 1.10:
-        return 0.96
-    if rel >= 0.75:
-        return 0.92
-    if rel >= 0.45:
-        return 0.84
-    if rel >= 0.25:
-        return 0.72
-    if rel >= 0.12:
-        return 0.60
-
-    if iou < 0.25:
-        return 0.84
-    if iou < 0.45:
-        return 0.72
-    if iou < 0.70:
-        return 0.56
-    return 0.42
-
-
-def _adaptive_object_smoothing_alpha(rel_move, match_iou):
-    rel = _as_float(rel_move)
-    iou = _as_float(match_iou)
-
-    if rel >= 1.10:
-        return 0.80
-    if rel >= 0.75:
-        return 0.72
-    if rel >= 0.45:
-        return 0.64
-    if rel >= 0.25:
-        return 0.56
-
-    if iou < 0.25:
-        return 0.62
-    if iou < 0.45:
-        return 0.52
-    return 0.44
-
-
-def _pick_best_prev(candidates, curr_box, allow_entry=None, min_iou=0.10, max_rel_dist=3.0):
-    best = None
-    best_score = -1e9
-    best_iou = 0.0
-    best_rel = 999.0
-
-    for _idx, entry in candidates:
-        if allow_entry and not allow_entry(entry):
-            continue
-        pb = entry.get("bbox")
-        if not pb:
-            continue
-
-        score, iou, rel = _match_score(pb, curr_box, entry.get("vx", 0.0), entry.get("vy", 0.0))
-        if score > best_score:
-            best = entry
-            best_score = score
-            best_iou = iou
-            best_rel = rel
-
-    if best is None:
-        return None, 0.0, 999.0
-
-    if best_iou < min_iou and best_rel > max_rel_dist:
-        return None, best_iou, best_rel
-
-    return best, best_iou, best_rel
 
 
 class DetectorManager:
@@ -950,391 +791,344 @@ class DetectorManager:
         with state.trackers_lock:
             state.trackers = entries
 
-    @staticmethod
-    def _build_grid(entries):
-        grid = {}
-        sizes = []
-        for e in entries:
-            pb = e.get("bbox")
-            if not pb:
-                continue
-            w = max(1.0, pb[2] - pb[0])
-            h = max(1.0, pb[3] - pb[1])
-            sizes.append(max(w, h))
-        avg_sz = max(16, int(sum(sizes) / len(sizes))) if sizes else 80
-        bucket = max(48, int(avg_sz * 1.5))
-        for idx, e in enumerate(entries):
-            pb = e.get("bbox")
-            if not pb:
-                continue
-            cx = int((pb[0] + pb[2]) / 2.0)
-            cy = int((pb[1] + pb[3]) / 2.0)
-            grid.setdefault((cx // bucket, cy // bucket), []).append((idx, e))
-        return grid, bucket
-
-    @staticmethod
-    def _nearby_candidates(grid, bucket, box):
-        cx = int((box[0] + box[2]) / 2.0)
-        cy = int((box[1] + box[3]) / 2.0)
-        gx, gy = cx // bucket, cy // bucket
-        cand = []
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                cell = (gx + dx, gy + dy)
-                if cell in grid:
-                    cand.extend(grid[cell])
-        return cand
-
     def _apply_smoothing(self, camera_id, faces, objects, frame_shape=None):
         state = self._get_camera_state(camera_id)
-        stable_raw = config.get("experimental_object_bbox_stabilization", True)
-        if isinstance(stable_raw, str):
-            use_stable_object_bboxes = stable_raw.strip().lower() in ("1", "true", "yes", "on")
-        else:
-            use_stable_object_bboxes = bool(stable_raw)
         try:
-            hold_frames = max(0, int(config.get("bbox_hold_max_frames", 6) or 6))
+            hold_frames = max(0, min(4, int(config.get("bbox_hold_max_frames", 3) or 3)))
         except Exception:
-            hold_frames = 6
+            hold_frames = 3
         try:
-            hold_stale_sec = max(0.0, float(config.get("bbox_hold_max_stale_sec", 0.75) or 0.75))
+            hold_stale_sec = max(0.0, min(0.45, float(config.get("bbox_hold_max_stale_sec", 0.35) or 0.35)))
         except Exception:
-            hold_stale_sec = 0.75
+            hold_stale_sec = 0.35
+
+        def _center_size(box):
+            cx, cy = _bbox_center(box)
+            w, h = _bbox_width_height(box)
+            return cx, cy, w, h
+
+        def _track_identity(kind, item):
+            if kind == "faces":
+                identity = item.get("identity")
+                if isinstance(identity, dict):
+                    return identity.get("id")
+                return None
+            return None
+
+        def _track_class(kind, item):
+            if kind == "objects":
+                return (item.get("plugin_id"), item.get("class") or item.get("class_id") or item.get("class_name"))
+            return None
+
+        def _compatible(kind, track, item):
+            if kind == "faces":
+                prev_id = track.get("id")
+                curr_id = _track_identity(kind, item)
+                return not (prev_id is not None and curr_id is not None and prev_id != curr_id)
+            prev_plugin, prev_cls = track.get("class_key") or (None, None)
+            curr_plugin, curr_cls = _track_class(kind, item)
+            if prev_plugin is not None and curr_plugin is not None and prev_plugin != curr_plugin:
+                return False
+            return not (prev_cls is not None and curr_cls is not None and prev_cls != curr_cls)
+
+        def _predict_track_box(track, now_ts):
+            box = track.get("bbox")
+            if not box:
+                return None
+            dt = max(0.0, min(0.30, now_ts - float(track.get("last_update", now_ts) or now_ts)))
+            return _shift_bbox(box, _as_float(track.get("vx_sec", 0.0)) * dt, _as_float(track.get("vy_sec", 0.0)) * dt)
+
+        def _find_match(kind, tracks, item, used_track_ids, now_ts):
+            curr_box = item.get("bbox")
+            if not curr_box:
+                return None
+
+            best = None
+            best_score = -1e9
+            best_iou = 0.0
+            best_rel = 999.0
+            for track in tracks:
+                if id(track) in used_track_ids or not track.get("bbox") or not _compatible(kind, track, item):
+                    continue
+                pred_box = _predict_track_box(track, now_ts) or track.get("bbox")
+                raw_iou = _iou(track.get("bbox"), curr_box)
+                pred_iou = _iou(pred_box, curr_box)
+                iou = max(raw_iou, pred_iou)
+                pcx, pcy = _bbox_center(pred_box)
+                ccx, ccy = _bbox_center(curr_box)
+                rel = (((pcx - ccx) ** 2 + (pcy - ccy) ** 2) ** 0.5) / _bbox_size(curr_box)
+                score = (iou * 1.25) - (rel * (0.14 if kind == "faces" else 0.20))
+                if score > best_score:
+                    best = track
+                    best_score = score
+                    best_iou = iou
+                    best_rel = rel
+
+            if best is None:
+                return None
+
+            min_iou = 0.04 if kind == "faces" else 0.10
+            max_rel = 2.8 if kind == "faces" else 1.8
+            if best_iou < min_iou and best_rel > max_rel:
+                return None
+            return best
+
+        def _gains(kind, residual_px, rel_residual, iou, box_size):
+            jitter_gate = max(1.25, min(5.0 if kind == "faces" else 7.0, box_size * 0.018))
+            if residual_px <= jitter_gate and iou >= 0.72:
+                return 0.18, 0.045, 0.08
+            if rel_residual >= 0.55 or iou < 0.18:
+                return 0.92, 0.42, 0.72
+            if rel_residual >= 0.25:
+                return 0.82, 0.30, 0.55
+            if rel_residual >= 0.10:
+                return 0.62, 0.18, 0.34
+            return 0.38, 0.10, 0.18
+
+        def _cap_velocity(vx_sec, vy_sec, box_size):
+            max_speed = max(450.0, min(3200.0, box_size * 18.0))
+            speed = ((vx_sec * vx_sec) + (vy_sec * vy_sec)) ** 0.5
+            if speed > max_speed > 0.0:
+                scale = max_speed / speed
+                vx_sec *= scale
+                vy_sec *= scale
+            deadband = max(6.0, min(20.0, box_size * 0.06))
+            if abs(vx_sec) < deadband:
+                vx_sec = 0.0
+            if abs(vy_sec) < deadband:
+                vy_sec = 0.0
+            return vx_sec, vy_sec
+
+        def _apply_track_output(item, track, raw_box, filtered_box, delta_x, delta_y):
+            item["raw_bbox"] = [int(round(float(v))) for v in raw_box]
+            item["bbox"] = [int(round(float(v))) for v in filtered_box]
+            item["track_vx"] = float(delta_x)
+            item["track_vy"] = float(delta_y)
+            item["track_vx_sec"] = _as_float(track.get("vx_sec", 0.0))
+            item["track_vy_sec"] = _as_float(track.get("vy_sec", 0.0))
+            item["track_ts"] = track.get("last_update", time.time())
+            item["_track_id"] = track.get("track_id")
+
+        def _updated_track(kind, item, matched, now_ts, next_track_id):
+            raw_box = [float(v) for v in item.get("bbox")]
+            raw_cx, raw_cy, raw_w, raw_h = _center_size(raw_box)
+            if matched is None or not matched.get("bbox"):
+                clipped = _clip_bbox_to_shape(raw_box, frame_shape) or [int(round(v)) for v in raw_box]
+                track = {
+                    "track_id": next_track_id,
+                    "kind": kind,
+                    "bbox": [float(v) for v in clipped],
+                    "raw_bbox": raw_box,
+                    "vx": 0.0,
+                    "vy": 0.0,
+                    "vx_sec": 0.0,
+                    "vy_sec": 0.0,
+                    "last_seen": now_ts,
+                    "last_update": now_ts,
+                    "misses": 0,
+                    "id": _track_identity(kind, item),
+                    "class_key": _track_class(kind, item),
+                }
+                _copy_track_metadata(kind, track, item)
+                _apply_track_output(item, track, raw_box, clipped, 0.0, 0.0)
+                return track, next_track_id + 1
+
+            prev_box = matched.get("bbox")
+            prev_cx, prev_cy, prev_w, prev_h = _center_size(prev_box)
+            dt = max(0.015, min(0.30, now_ts - float(matched.get("last_update", now_ts) or now_ts)))
+            prev_raw_box = matched.get("raw_bbox") or prev_box
+            prev_raw_cx, prev_raw_cy, _, _ = _center_size(prev_raw_box)
+            pred_cx = prev_cx + (_as_float(matched.get("vx_sec", 0.0)) * dt)
+            pred_cy = prev_cy + (_as_float(matched.get("vy_sec", 0.0)) * dt)
+            rx = raw_cx - pred_cx
+            ry = raw_cy - pred_cy
+            residual_px = ((rx * rx) + (ry * ry)) ** 0.5
+            box_size = _bbox_size(raw_box)
+            rel_residual = residual_px / box_size
+            pred_box = _box_from_center(pred_cx, pred_cy, prev_w, prev_h)
+            match_iou = max(_iou(prev_box, raw_box), _iou(pred_box, raw_box))
+            pos_gain, vel_gain, size_gain = _gains(kind, residual_px, rel_residual, match_iou, box_size)
+
+            new_cx = pred_cx + (pos_gain * rx)
+            new_cy = pred_cy + (pos_gain * ry)
+            measured_vx_sec = (raw_cx - prev_raw_cx) / dt
+            measured_vy_sec = (raw_cy - prev_raw_cy) / dt
+            if residual_px <= max(1.25, box_size * 0.018) and match_iou >= 0.72:
+                vel_mix = 0.10
+            else:
+                vel_mix = max(0.30, min(0.85, vel_gain * 1.9))
+            vx_sec = (_as_float(matched.get("vx_sec", 0.0)) * (1.0 - vel_mix)) + (measured_vx_sec * vel_mix)
+            vy_sec = (_as_float(matched.get("vy_sec", 0.0)) * (1.0 - vel_mix)) + (measured_vy_sec * vel_mix)
+            vx_sec, vy_sec = _cap_velocity(vx_sec, vy_sec, box_size)
+
+            new_w = prev_w + ((raw_w - prev_w) * size_gain)
+            new_h = prev_h + ((raw_h - prev_h) * size_gain)
+            min_w = max(2.0, raw_w * 0.55)
+            min_h = max(2.0, raw_h * 0.55)
+            max_w = raw_w * 1.65
+            max_h = raw_h * 1.65
+            new_w = max(min_w, min(max_w, new_w))
+            new_h = max(min_h, min(max_h, new_h))
+
+            filtered_box = _clip_bbox_to_shape(_box_from_center(new_cx, new_cy, new_w, new_h), frame_shape) or raw_box
+            filt_cx, filt_cy, _, _ = _center_size(filtered_box)
+            delta_x = filt_cx - prev_cx
+            delta_y = filt_cy - prev_cy
+
+            track = {
+                **matched,
+                "bbox": [float(v) for v in filtered_box],
+                "raw_bbox": raw_box,
+                "vx": delta_x,
+                "vy": delta_y,
+                "vx_sec": vx_sec,
+                "vy_sec": vy_sec,
+                "last_seen": now_ts,
+                "last_update": now_ts,
+                "misses": 0,
+                "id": _track_identity(kind, item) if _track_identity(kind, item) is not None else matched.get("id"),
+                "class_key": _track_class(kind, item) if kind == "objects" else matched.get("class_key"),
+            }
+            _copy_track_metadata(kind, track, item)
+            _apply_track_output(item, track, raw_box, filtered_box, delta_x, delta_y)
+            return track, next_track_id
+
+        def _copy_track_metadata(kind, track, item):
+            if kind == "faces":
+                track.update(
+                    {
+                        "_ident_info": item.get("identity"),
+                        "_confidence": item.get("confidence"),
+                        "_det_score": item.get("det_score", 0.0),
+                        "_embedding": item.get("embedding"),
+                        "_liveness": item.get("liveness", 1.0),
+                        "_gender": item.get("gender", "unknown"),
+                        "_gender_conf": item.get("gender_confidence", 0.0),
+                        "_last_identify_frame": item.get("last_identify_frame", -1),
+                    }
+                )
+            else:
+                track.update(
+                    {
+                        "_plugin_id": item.get("plugin_id"),
+                        "_plugin_name": item.get("plugin_name"),
+                        "_class": item.get("class"),
+                        "_class_name": item.get("class_name"),
+                        "_det_score": item.get("det_score", 0.0),
+                        "_confidence": item.get("confidence", item.get("det_score", 0.0)),
+                    }
+                )
+
+        def _coast_track(kind, track, now_ts):
+            misses = int(track.get("misses", 0) or 0) + 1
+            age = now_ts - float(track.get("last_seen", now_ts) or now_ts)
+            if misses > hold_frames or age > hold_stale_sec or not track.get("bbox"):
+                return None, None
+
+            dt = max(0.015, min(0.30, now_ts - float(track.get("last_update", now_ts) or now_ts)))
+            vx_sec = _as_float(track.get("vx_sec", 0.0)) * 0.72
+            vy_sec = _as_float(track.get("vy_sec", 0.0)) * 0.72
+            pred_box = _clip_bbox_to_shape(_shift_bbox(track["bbox"], vx_sec * dt, vy_sec * dt), frame_shape)
+            if not pred_box:
+                return None, None
+
+            prev_cx, prev_cy = _bbox_center(track["bbox"])
+            pred_cx, pred_cy = _bbox_center(pred_box)
+            coasted_track = {
+                **track,
+                "bbox": [float(v) for v in pred_box],
+                "vx": pred_cx - prev_cx,
+                "vy": pred_cy - prev_cy,
+                "vx_sec": vx_sec,
+                "vy_sec": vy_sec,
+                "last_update": now_ts,
+                "misses": misses,
+            }
+
+            if kind == "faces":
+                conf = max(0.0, _as_float(track.get("_confidence"), _as_float(track.get("_det_score"))) * (0.78 ** misses))
+                item = {
+                    "bbox": pred_box,
+                    "raw_bbox": track.get("raw_bbox") or pred_box,
+                    "identity": track.get("_ident_info"),
+                    "confidence": conf,
+                    "det_score": max(0.0, _as_float(track.get("_det_score")) * (0.72 ** misses)),
+                    "embedding": track.get("_embedding"),
+                    "liveness": track.get("_liveness", 1.0),
+                    "gender": track.get("_gender", "unknown"),
+                    "gender_confidence": track.get("_gender_conf", 0.0),
+                    "last_identify_frame": track.get("_last_identify_frame", -1),
+                    "track_vx": coasted_track["vx"],
+                    "track_vy": coasted_track["vy"],
+                    "track_vx_sec": vx_sec,
+                    "track_vy_sec": vy_sec,
+                    "track_ts": now_ts,
+                    "_track_id": track.get("track_id"),
+                    "_coasted": True,
+                }
+                return coasted_track, item
+
+            item = {
+                "bbox": pred_box,
+                "raw_bbox": track.get("raw_bbox") or pred_box,
+                "plugin_id": track.get("_plugin_id"),
+                "plugin_name": track.get("_plugin_name"),
+                "class": track.get("_class"),
+                "class_name": track.get("_class_name") or str(track.get("_class")),
+                "confidence": max(0.0, _as_float(track.get("_confidence"), _as_float(track.get("_det_score"))) * (0.78 ** misses)),
+                "det_score": max(0.0, _as_float(track.get("_det_score")) * (0.72 ** misses)),
+                "track_vx": coasted_track["vx"],
+                "track_vy": coasted_track["vy"],
+                "track_vx_sec": vx_sec,
+                "track_vy_sec": vy_sec,
+                "track_ts": now_ts,
+                "_track_id": track.get("track_id"),
+                "_coasted": True,
+            }
+            return coasted_track, item
+
+        def _process(kind, detections, previous_tracks, next_track_id, limit):
+            used_track_ids = set()
+            new_tracks = []
+            for item in detections:
+                if not item.get("bbox"):
+                    continue
+                matched = _find_match(kind, previous_tracks, item, used_track_ids, now)
+                if matched is not None:
+                    used_track_ids.add(id(matched))
+                track, next_track_id = _updated_track(kind, item, matched, now, next_track_id)
+                new_tracks.append(track)
+
+            for track in previous_tracks:
+                if id(track) in used_track_ids:
+                    continue
+                coasted_track, coasted_item = _coast_track(kind, track, now)
+                if coasted_track is None or coasted_item is None:
+                    continue
+                new_tracks.append(coasted_track)
+                detections.append(coasted_item)
+
+            new_tracks.sort(key=lambda t: float(t.get("last_seen", 0.0) or 0.0), reverse=True)
+            return new_tracks[:limit], next_track_id
+
         with state.smoothing_lock:
             prev = state.smoothing_state
             now = time.time()
+            try:
+                next_track_id = int(prev.get("next_track_id", 1) or 1)
+            except Exception:
+                next_track_id = 1
 
-            new_face_state = []
-            face_grid, face_bucket = self._build_grid(prev.get("faces", []))
-            matched_face_entries = set()
+            try:
+                max_tracks = max(16, int(config.get("max_trackers_per_cam", 32) or 32))
+            except Exception:
+                max_tracks = 32
+            face_tracks, next_track_id = _process("faces", faces, list(prev.get("faces", [])), next_track_id, max_tracks)
+            obj_tracks, next_track_id = _process("objects", objects, list(prev.get("objects", [])), next_track_id, max_tracks)
 
-            for f in faces:
-                curr_box = f.get("bbox")
-                if not curr_box:
-                    new_face_state.append(
-                        {
-                            "id": None,
-                            "bbox": None,
-                            "vx": 0.0,
-                            "vy": 0.0,
-                            "last_seen": now,
-                            "_ident_info": None,
-                            "_confidence": None,
-                            "_liveness": 1.0,
-                            "_det_score": 0.0,
-                            "_gender": "unknown",
-                            "_gender_conf": 0.0,
-                            "lm_center": None,
-                        }
-                    )
-                    continue
-                ident = None
-                if isinstance(f.get("identity"), dict):
-                    ident = f["identity"].get("id")
-
-                matched = None
-                best_iou = 0.0
-                if ident:
-                    for p in prev["faces"]:
-                        if p.get("id") == ident and p.get("bbox"):
-                            matched = p
-                            _score, best_iou, _ = _match_score(
-                                p.get("bbox"),
-                                curr_box,
-                                p.get("vx", 0.0),
-                                p.get("vy", 0.0),
-                            )
-                            break
-
-                if not matched:
-                    candidates = self._nearby_candidates(face_grid, face_bucket, curr_box)
-                    matched, best_iou, _ = _pick_best_prev(
-                        candidates,
-                        curr_box,
-                        min_iou=0.08,
-                        max_rel_dist=3.2,
-                    )
-                if matched is not None:
-                    matched_face_entries.add(id(matched))
-
-                vx = vy = 0.0
-                if matched and matched.get("bbox"):
-                    pb = matched["bbox"]
-                    cx_prev, cy_prev = _bbox_center(pb)
-                    cx_curr, cy_curr = _bbox_center(curr_box)
-                    move_dist = ((cx_prev - cx_curr) ** 2 + (cy_prev - cy_curr) ** 2) ** 0.5
-                    rel_move = move_dist / _bbox_size(curr_box)
-                    prev_vx = _as_float(matched.get("vx", 0.0))
-                    prev_vy = _as_float(matched.get("vy", 0.0))
-                    lm_center = _landmark_motion_center(f.get("landmarks"))
-                    prev_lm_center = matched.get("lm_center")
-                    if lm_center and prev_lm_center:
-                        lm_dx = lm_center[0] - float(prev_lm_center[0])
-                        lm_dy = lm_center[1] - float(prev_lm_center[1])
-                        pred_cx = cx_prev + lm_dx
-                        pred_cy = cy_prev + lm_dy
-                        residual = (((pred_cx - cx_curr) ** 2 + (pred_cy - cy_curr) ** 2) ** 0.5) / _bbox_size(curr_box)
-                        anchor_weight = 0.82 if residual <= 0.16 else (0.64 if residual <= 0.34 else 0.42)
-                        ncx = (pred_cx * anchor_weight) + (cx_curr * (1.0 - anchor_weight))
-                        ncy = (pred_cy * anchor_weight) + (cy_curr * (1.0 - anchor_weight))
-
-                        pw, ph = _bbox_width_height(pb)
-                        cw, ch = _bbox_width_height(curr_box)
-                        scale_delta = _bbox_scale_delta(pb, curr_box)
-                        size_alpha = 0.08 if scale_delta <= 0.12 else (0.18 if scale_delta <= 0.28 else 0.36)
-                        nw = (pw * (1.0 - size_alpha)) + (cw * size_alpha)
-                        nh = (ph * (1.0 - size_alpha)) + (ch * size_alpha)
-                        max_scale_change = 0.04 if scale_delta <= 0.12 else 0.10
-                        nw = max(pw * (1.0 - max_scale_change), min(pw * (1.0 + max_scale_change), nw))
-                        nh = max(ph * (1.0 - max_scale_change), min(ph * (1.0 + max_scale_change), nh))
-                        smooth_box = _box_from_center(ncx, ncy, nw, nh)
-                        vx = (0.35 * prev_vx) + (0.65 * (ncx - cx_prev))
-                        vy = (0.35 * prev_vy) + (0.65 * (ncy - cy_prev))
-                    else:
-                        scale_delta = _bbox_scale_delta(pb, curr_box)
-                        jitter_px = max(1.25, min(5.0, _bbox_size(curr_box) * 0.018))
-                        if best_iou >= 0.72 and move_dist <= jitter_px and scale_delta <= 0.045:
-                            smooth_box = _smooth_bbox(
-                                pb,
-                                curr_box,
-                                alpha=0.18,
-                                alpha_size=0.0,
-                                max_scale_change=0.025,
-                                as_float=True,
-                            )
-                            vx = prev_vx * 0.25
-                            vy = prev_vy * 0.25
-                        else:
-                            alpha = _adaptive_smoothing_alpha(rel_move, best_iou)
-                            smooth_box = _smooth_bbox(pb, curr_box, alpha=alpha, max_scale_change=0.10, as_float=True)
-                            sbx, sby = _bbox_center(smooth_box)
-                            inst_vx = sbx - cx_prev
-                            inst_vy = sby - cy_prev
-                            vx = (0.45 * prev_vx) + (0.55 * inst_vx)
-                            vy = (0.45 * prev_vy) + (0.55 * inst_vy)
-
-                    velocity_deadband = max(0.28, min(1.15, _bbox_size(curr_box) * 0.004))
-                    if abs(vx) < velocity_deadband:
-                        vx = 0.0
-                    if abs(vy) < velocity_deadband:
-                        vy = 0.0
-                    f["bbox"] = [int(round(v)) for v in smooth_box]
-
-                f["track_vx"] = vx
-                f["track_vy"] = vy
-
-                new_face_state.append(
-                    {
-                        "id": ident,
-                        "bbox": smooth_box if matched and matched.get("bbox") else f.get("bbox"),
-                        "vx": vx,
-                        "vy": vy,
-                        "last_seen": now,
-                        "_ident_info": f.get("identity"),
-                        "_confidence": f.get("confidence"),
-                        "_liveness": f.get("liveness", 1.0),
-                        "_det_score": f.get("det_score", 0.0),
-                        "_gender": f.get("gender", "unknown"),
-                        "_gender_conf": f.get("gender_confidence", 0.0),
-                        "lm_center": _landmark_motion_center(f.get("landmarks")),
-                        "misses": 0,
-                    }
-                )
-
-            if hold_frames > 0 and hold_stale_sec > 0.0:
-                for p in prev.get("faces", []):
-                    if id(p) in matched_face_entries or not p.get("bbox"):
-                        continue
-                    misses = int(p.get("misses", 0) or 0) + 1
-                    age = now - float(p.get("last_seen", now) or now)
-                    if misses > hold_frames or age > hold_stale_sec:
-                        continue
-                    vx = _as_float(p.get("vx", 0.0)) * 0.82
-                    vy = _as_float(p.get("vy", 0.0)) * 0.82
-                    pred_box = _clip_bbox_to_shape(_shift_bbox(p["bbox"], vx, vy), frame_shape)
-                    if not pred_box:
-                        continue
-                    pred_face = {
-                        "bbox": pred_box,
-                        "identity": p.get("_ident_info"),
-                        "confidence": max(0.0, _as_float(p.get("_confidence"), _as_float(p.get("_det_score"))) * 0.86),
-                        "det_score": max(0.0, _as_float(p.get("_det_score")) * 0.80),
-                        "embedding": None,
-                        "liveness": p.get("_liveness", 1.0),
-                        "gender": p.get("_gender", "unknown"),
-                        "gender_confidence": p.get("_gender_conf", 0.0),
-                        "track_vx": vx,
-                        "track_vy": vy,
-                        "_coasted": True,
-                    }
-                    faces.append(pred_face)
-                    new_face_state.append(
-                        {
-                            **p,
-                            "bbox": pred_box,
-                            "vx": vx,
-                            "vy": vy,
-                            "misses": misses,
-                        }
-                    )
-
-            new_obj_state = []
-            obj_grid, obj_bucket = self._build_grid(prev.get("objects", []))
-            matched_obj_entries = set()
-
-            for o in objects:
-                curr_box = o.get("bbox")
-                if not curr_box:
-                    new_obj_state.append(
-                        {
-                            "plugin": o.get("plugin_id"),
-                            "class": None,
-                            "bbox": None,
-                            "vx": 0.0,
-                            "vy": 0.0,
-                            "last_seen": now,
-                            "_class_name": None,
-                            "_plugin_name": None,
-                            "_det_score": 0.0,
-                        }
-                    )
-                    continue
-                plugin = o.get("plugin_id")
-                cls = o.get("class") or o.get("label") or o.get("class_name")
-                candidates = self._nearby_candidates(obj_grid, obj_bucket, curr_box)
-                matched, best_iou, _ = _pick_best_prev(
-                    candidates,
-                    curr_box,
-                    allow_entry=lambda p: p.get("plugin") == plugin
-                    and not (p.get("class") is not None and cls is not None and p.get("class") != cls),
-                    min_iou=0.16,
-                    max_rel_dist=2.2,
-                )
-                if matched is not None:
-                    matched_obj_entries.add(id(matched))
-
-                vx = vy = 0.0
-                smooth_box = None
-                if matched and matched.get("bbox"):
-                    sb_prev = matched["bbox"]
-                    cx_prev, cy_prev = _bbox_center(sb_prev)
-                    cx_curr, cy_curr = _bbox_center(curr_box)
-                    move_dist = ((cx_prev - cx_curr) ** 2 + (cy_prev - cy_curr) ** 2) ** 0.5
-                    rel_move = move_dist / _bbox_size(curr_box)
-                    if use_stable_object_bboxes:
-                        scale_delta = _bbox_scale_delta(sb_prev, curr_box)
-                        jitter_px = max(1.5, min(7.0, _bbox_size(curr_box) * 0.02))
-                        if best_iou >= 0.72 and move_dist <= jitter_px and scale_delta <= 0.05:
-                            smooth_box = _smooth_bbox(
-                                sb_prev,
-                                curr_box,
-                                alpha=0.12,
-                                alpha_size=0.0,
-                                max_scale_change=0.02,
-                                as_float=True,
-                            )
-                            o["bbox"] = [int(round(v)) for v in smooth_box]
-                            prev_vx = _as_float(matched.get("vx", 0.0))
-                            prev_vy = _as_float(matched.get("vy", 0.0))
-                            vx = prev_vx * 0.25
-                            vy = prev_vy * 0.25
-                        else:
-                            alpha = _adaptive_object_smoothing_alpha(rel_move, best_iou)
-                            if rel_move < 0.04:
-                                alpha = min(alpha, 0.38)
-                            smooth_box = _smooth_bbox(
-                                sb_prev,
-                                curr_box,
-                                alpha=alpha,
-                                max_scale_change=0.06,
-                                as_float=True,
-                            )
-                            o["bbox"] = [int(round(v)) for v in smooth_box]
-                            sbx, sby = _bbox_center(smooth_box)
-                            inst_vx = sbx - cx_prev
-                            inst_vy = sby - cy_prev
-                            prev_vx = _as_float(matched.get("vx", 0.0))
-                            prev_vy = _as_float(matched.get("vy", 0.0))
-                            vx = (0.75 * prev_vx) + (0.25 * inst_vx)
-                            vy = (0.75 * prev_vy) + (0.25 * inst_vy)
-                            if abs(vx) < 0.35:
-                                vx = 0.0
-                            if abs(vy) < 0.35:
-                                vy = 0.0
-                    else:
-                        alpha = _adaptive_smoothing_alpha(rel_move, best_iou)
-                        alpha = min(0.92, max(0.72, alpha + 0.08))
-                        smooth_box = _smooth_bbox(sb_prev, curr_box, alpha=alpha, max_scale_change=0.12, as_float=True)
-                        o["bbox"] = [int(round(v)) for v in smooth_box]
-                        sbx, sby = _bbox_center(smooth_box)
-                        inst_vx = sbx - cx_prev
-                        inst_vy = sby - cy_prev
-                        prev_vx = _as_float(matched.get("vx", 0.0))
-                        prev_vy = _as_float(matched.get("vy", 0.0))
-                        vx = (0.55 * prev_vx) + (0.45 * inst_vx)
-                        vy = (0.55 * prev_vy) + (0.45 * inst_vy)
-                        if abs(vx) < 0.25:
-                            vx = 0.0
-                        if abs(vy) < 0.25:
-                            vy = 0.0
-
-                o["track_vx"] = vx
-                o["track_vy"] = vy
-
-                new_obj_state.append(
-                    {
-                        "plugin": plugin,
-                        "class": cls,
-                        "bbox": smooth_box if smooth_box is not None else o.get("bbox"),
-                        "vx": vx,
-                        "vy": vy,
-                        "last_seen": now,
-                        "_class_name": o.get("class_name"),
-                        "_plugin_name": o.get("plugin_name"),
-                        "_det_score": o.get("det_score", 0.0),
-                        "_confidence": o.get("confidence", o.get("det_score", 0.0)),
-                        "misses": 0,
-                    }
-                )
-
-            if hold_frames > 0 and hold_stale_sec > 0.0:
-                for p in prev.get("objects", []):
-                    if id(p) in matched_obj_entries or not p.get("bbox"):
-                        continue
-                    misses = int(p.get("misses", 0) or 0) + 1
-                    age = now - float(p.get("last_seen", now) or now)
-                    if misses > hold_frames or age > hold_stale_sec:
-                        continue
-                    vx = _as_float(p.get("vx", 0.0)) * 0.84
-                    vy = _as_float(p.get("vy", 0.0)) * 0.84
-                    pred_box = _clip_bbox_to_shape(_shift_bbox(p["bbox"], vx, vy), frame_shape)
-                    if not pred_box:
-                        continue
-                    pred_obj = {
-                        "bbox": pred_box,
-                        "plugin_id": p.get("plugin"),
-                        "plugin_name": p.get("_plugin_name"),
-                        "class": p.get("class"),
-                        "class_name": p.get("_class_name") or str(p.get("class")),
-                        "confidence": max(0.0, _as_float(p.get("_confidence"), _as_float(p.get("_det_score"))) * 0.84),
-                        "det_score": max(0.0, _as_float(p.get("_det_score")) * 0.78),
-                        "track_vx": vx,
-                        "track_vy": vy,
-                        "_coasted": True,
-                    }
-                    objects.append(pred_obj)
-                    new_obj_state.append(
-                        {
-                            **p,
-                            "bbox": pred_box,
-                            "vx": vx,
-                            "vy": vy,
-                            "misses": misses,
-                        }
-                    )
-
-            prev["faces"] = new_face_state
-            prev["objects"] = new_obj_state
+            prev["faces"] = face_tracks
+            prev["objects"] = obj_tracks
+            prev["next_track_id"] = next_track_id
             state.smoothing_state = prev
 
         return [], []
@@ -1375,8 +1169,7 @@ class DetectorManager:
                 except Exception:
                     logger.debug("Liveness evaluation failed for camera %s", camera_id, exc_info=True)
 
-            if faces or objects:
-                self._rebuild_trackers(camera_id, faces, objects, max_trackers)
+            self._rebuild_trackers(camera_id, faces, objects, max_trackers)
 
         return {
             "faces": faces,
