@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 37
+CURRENT_VERSION = 38
 
 
 def apply(conn):
@@ -85,7 +85,15 @@ def apply(conn):
         _migrate_v36(conn)
     if version < 37:
         _migrate_v37(conn)
+    if version < 38:
+        _migrate_v38(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v38(conn):
+    for key in ("bbox_predict_max_frames", "bbox_predict_max_stale_sec"):
+        conn.execute("DELETE FROM app_settings WHERE key=?", (key,))
     conn.commit()
 
 

@@ -259,8 +259,6 @@ INSERT OR IGNORE INTO app_settings VALUES ('inference_future_timeout_sec', '2.0'
 INSERT OR IGNORE INTO app_settings VALUES ('adaptive_live_infer_interval', '1', 'bool', 'Adaptive Live Inference Interval', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_infer_interval_min', '1', 'int', 'Live Inference Interval Min', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_infer_interval_max', '2', 'int', 'Live Inference Interval Max', 'performance');
-INSERT OR IGNORE INTO app_settings VALUES ('bbox_predict_max_frames', '2', 'int', 'BBox Prediction Max Frames', 'performance');
-INSERT OR IGNORE INTO app_settings VALUES ('bbox_predict_max_stale_sec', '0.20', 'float', 'BBox Prediction Max Staleness', 'performance');
 CREATE INDEX IF NOT EXISTS idx_detection_logs_timestamp ON detection_logs (timestamp);
 CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_id ON detection_logs (camera_id);
 CREATE INDEX IF NOT EXISTS idx_known_faces_name ON known_faces (name);

@@ -1,3 +1,5 @@
+import time
+
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy
@@ -54,15 +56,25 @@ class VideoWidget(QLabel):
         self._frame_w = 1
         self._frame_h = 1
         self._fps = 0.0
+        self._render_fps = 0.0
+        self._infer_fps = 0.0
+        self._has_infer_fps = False
+        self._render_count = 0
+        self._last_render_fps_time = time.monotonic()
 
     def update_frame(self, frame, state=None):
-        if state:
-            self._state = state
+        if state is not None:
+            self._state = state or {}
+            self._fps = float(state.get("_capture_fps", self._fps) or 0.0)
+            if "_infer_fps" in state:
+                self._infer_fps = float(state.get("_infer_fps") or 0.0)
+                self._has_infer_fps = True
         if frame is None:
             return
         self._last_frame = frame
         if len(frame.shape) != 3 or frame.shape[2] != 3:
             return
+        self._update_render_fps()
         h, w, ch = frame.shape
         self._frame_w, self._frame_h = w, h
         qimg = QImage(frame.data, w, h, ch * w, QImage.Format.Format_BGR888)
@@ -76,9 +88,18 @@ class VideoWidget(QLabel):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation if use_fast else Qt.TransformationMode.SmoothTransformation,
         )
-        if self._show_overlays and self._state:
+        if self._show_overlays:
             scaled = self._draw_overlays(scaled, w, h)
         self.setPixmap(scaled)
+
+    def _update_render_fps(self):
+        self._render_count += 1
+        now = time.monotonic()
+        elapsed = now - self._last_render_fps_time
+        if elapsed >= 1.0:
+            self._render_fps = self._render_count / elapsed
+            self._render_count = 0
+            self._last_render_fps_time = now
 
     def _scale_bbox(self, bbox, frame_w, frame_h, px_w, px_h):
         sx = px_w / frame_w
@@ -195,18 +216,29 @@ class VideoWidget(QLabel):
             painter.setPen(QColor(_ACCENT_HI))
             painter.drawText(QRect(6, 6, bw, bh), Qt.AlignmentFlag.AlignCenter, badge_text)
 
-        if self._fps > 0:
-            fps_text = f"{self._fps:.1f} fps"
+        if self._fps > 0 or self._render_fps > 0 or self._has_infer_fps:
+            metrics = []
+            if self._fps > 0:
+                metrics.append(("Cam", self._fps))
+            if self._render_fps > 0:
+                metrics.append(("UI", self._render_fps))
+            if self._has_infer_fps:
+                metrics.append(("AI", self._infer_fps))
+            fps_text = "  ".join(f"{name} {value:.1f}" for name, value in metrics)
             painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
             fm = painter.fontMetrics()
             bw = fm.horizontalAdvance(fps_text) + 10
+            if bw > px_w - 12:
+                fps_text = "  ".join(f"{name[0]} {value:.0f}" for name, value in metrics)
+                bw = fm.horizontalAdvance(fps_text) + 10
             bh = fm.height() + 4
             bg2 = QColor(_BG_SURFACE)
             bg2.setAlpha(180)
             painter.setBrush(QBrush(bg2))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(QRect(6, px_h - bh - 6, bw, bh), 3, 3)
-            fps_color = _SUCCESS if self._fps >= 20 else (_WARNING_ORANGE if self._fps >= 10 else _DANGER_DIM)
+            displayed_fps = self._render_fps or self._fps
+            fps_color = _SUCCESS if displayed_fps >= 20 else (_WARNING_ORANGE if displayed_fps >= 10 else _DANGER_DIM)
             painter.setPen(QColor(fps_color))
             painter.drawText(QRect(6, px_h - bh - 6, bw, bh), Qt.AlignmentFlag.AlignCenter, fps_text)
 

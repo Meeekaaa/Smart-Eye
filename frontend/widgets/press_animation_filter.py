@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import weakref
 
 from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPropertyAnimation, Qt
 from PySide6.QtWidgets import QAbstractButton, QGraphicsOpacityEffect
+from shiboken6 import isValid
 
 
 class PressAnimationFilter(QObject):
@@ -57,21 +59,36 @@ class PressAnimationFilter(QObject):
         effect = self._ensure_effect(btn)
         if effect is None:
             return
-        anim = self._anims.get(btn)
-        if anim is not None:
-            anim.stop()
+        anim = self._anims.pop(btn, None)
+        if anim is not None and isValid(anim):
+            with contextlib.suppress(RuntimeError):
+                anim.stop()
+                anim.deleteLater()
         anim = QPropertyAnimation(effect, b"opacity", btn)
         anim.setDuration(duration)
         anim.setStartValue(effect.opacity())
         anim.setEndValue(target)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        if target >= 0.999 and self._owns_effect.get(btn, False):
-            anim.finished.connect(lambda b=btn, e=effect: self._cleanup_effect(b, e))
-        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        anim.finished.connect(lambda b=btn, e=effect, a=anim, t=target: self._animation_finished(b, e, a, t))
+        anim.start()
         self._anims[btn] = anim
 
+    def _animation_finished(
+        self,
+        btn: QAbstractButton,
+        effect: QGraphicsOpacityEffect,
+        anim: QPropertyAnimation,
+        target: float,
+    ) -> None:
+        if self._anims.get(btn) is anim:
+            self._anims.pop(btn, None)
+        if target >= 0.999 and self._owns_effect.get(btn, False):
+            self._cleanup_effect(btn, effect)
+        if isValid(anim):
+            anim.deleteLater()
+
     def _cleanup_effect(self, btn: QAbstractButton, effect: QGraphicsOpacityEffect) -> None:
-        if btn.graphicsEffect() is effect:
+        if isValid(btn) and isValid(effect) and btn.graphicsEffect() is effect:
             btn.setGraphicsEffect(None)
         self._owns_effect.pop(btn, None)
         self._anims.pop(btn, None)
