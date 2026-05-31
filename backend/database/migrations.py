@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 39
+CURRENT_VERSION = 41
 
 
 def apply(conn):
@@ -89,7 +89,60 @@ def apply(conn):
         _migrate_v38(conn)
     if version < 39:
         _migrate_v39(conn)
+    if version < 40:
+        _migrate_v40(conn)
+    if version < 41:
+        _migrate_v41(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v41(conn):
+    settings = [
+        ("detection_interval", "1", "int", "Detection Interval", "performance"),
+        ("insightface_det_size", "640", "int", "InsightFace Detector Size", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='640' WHERE key='insightface_det_size' AND CAST(value AS INTEGER) < 320")
+    conn.commit()
+
+
+def _migrate_v40(conn):
+    settings = [
+        ("live_infer_dim", "640", "int", "Live Inference Size", "performance"),
+        ("live_infer_dim_min", "384", "int", "Live Inference Size Min", "performance"),
+        ("live_infer_dim_max", "768", "int", "Live Inference Size Max", "performance"),
+        ("adaptive_live_infer_dim", "1", "bool", "Adaptive Live Inference Size", "performance"),
+        ("detector_max_infer_dim", "768", "int", "Detector Max Inference Size", "performance"),
+        ("bbox_hold_max_frames", "3", "int", "BBox Hold Frames", "performance"),
+        ("bbox_hold_max_stale_sec", "0.35", "float", "BBox Hold Staleness", "performance"),
+        ("min_face_size", "24", "int", "Minimum Face Size", "detection"),
+        ("object_min_area_ratio", "0.00025", "float", "Object Minimum Area Ratio", "detection"),
+        ("person_weak_detection_confidence", "0.55", "float", "Weak Person Confidence", "detection"),
+        ("person_tiny_area_ratio", "0.006", "float", "Tiny Person Area Ratio", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='640' WHERE key='live_infer_dim' AND CAST(value AS INTEGER) < 640")
+    conn.execute("UPDATE app_settings SET value='384' WHERE key='live_infer_dim_min' AND CAST(value AS INTEGER) < 384")
+    conn.execute("UPDATE app_settings SET value='768' WHERE key='live_infer_dim_max' AND CAST(value AS INTEGER) < 768")
+    conn.execute("UPDATE app_settings SET value='24' WHERE key='min_face_size' AND CAST(value AS INTEGER) >= 40")
+    conn.execute("UPDATE app_settings SET value='24' WHERE key LIKE 'camera_%_min_face_size' AND CAST(value AS INTEGER) >= 40")
     conn.commit()
 
 

@@ -57,9 +57,9 @@ class CameraThread(QThread):
         self._clip_repeat_window = 60.0
         self._ui_frame_interval_sec = 1.0 / 15.0
         self._last_frame_emit_ts = 0.0
-        self._infer_dim = 384
-        self._infer_dim_min = 256
-        self._infer_dim_max = 512
+        self._infer_dim = 640
+        self._infer_dim_min = 384
+        self._infer_dim_max = 768
         self._adaptive_infer_dim = True
         self._infer_tune_counter = 0
         self._last_inference_ts = 0.0
@@ -217,17 +217,17 @@ class CameraThread(QThread):
             self._infer_interval = self._infer_interval_min
 
         try:
-            self._infer_dim = int(db.get_int("live_infer_dim", 384) or 384)
-            self._infer_dim_min = int(db.get_int("live_infer_dim_min", 256) or 256)
-            self._infer_dim_max = int(db.get_int("live_infer_dim_max", 512) or 512)
+            self._infer_dim = int(db.get_int("live_infer_dim", 640) or 640)
+            self._infer_dim_min = int(db.get_int("live_infer_dim_min", 384) or 384)
+            self._infer_dim_max = int(db.get_int("live_infer_dim_max", 768) or 768)
             self._adaptive_infer_dim = bool(db.get_bool("adaptive_live_infer_dim", True))
         except Exception:
-            self._infer_dim = 384
-            self._infer_dim_min = 256
-            self._infer_dim_max = 512
+            self._infer_dim = 640
+            self._infer_dim_min = 384
+            self._infer_dim_max = 768
             self._adaptive_infer_dim = True
 
-        self._infer_dim_min = max(160, int(self._infer_dim_min))
+        self._infer_dim_min = max(256, int(self._infer_dim_min))
         self._infer_dim_max = max(self._infer_dim_min, int(self._infer_dim_max))
         self._infer_dim = max(self._infer_dim_min, min(self._infer_dim_max, int(self._infer_dim)))
 

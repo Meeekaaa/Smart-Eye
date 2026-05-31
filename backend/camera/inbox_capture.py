@@ -44,6 +44,8 @@ def capture_unknown_faces(thread: Any, frame, result):
         )
 
     def usable(face):
+        if face.get("_coasted"):
+            return False
         bbox = face.get("bbox")
         if not bbox or len(bbox) != 4:
             return False

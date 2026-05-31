@@ -440,9 +440,9 @@ class CameraDetailPanel(QWidget):
         try:
             min_face_size = db.get_setting(f"camera_{cam['id']}_min_face_size", None)
             if min_face_size is None:
-                min_face_size = db.get_setting("min_face_size", 40) or 40
+                min_face_size = db.get_setting("min_face_size", 24) or 24
         except (sqlite3.Error, OSError, ValueError):
-            min_face_size = 40
+            min_face_size = 24
         for lbl, val in [
             ("Face Recognition", "Enabled" if face_on else "Disabled"),
             ("Match Threshold", thresh_display),
@@ -750,9 +750,9 @@ class CameraDetailPanel(QWidget):
         try:
             cur_min_face = db.get_setting(f"camera_{cam_id}_min_face_size", None)
             if cur_min_face is None:
-                cur_min_face = db.get_setting("min_face_size", 40) or 40
+                cur_min_face = db.get_setting("min_face_size", 24) or 24
         except (sqlite3.Error, OSError, ValueError):
-            cur_min_face = 40
+            cur_min_face = 24
         min_face_size_spin = QSpinBox()
         min_face_size_spin.setRange(10, 500)
         min_face_size_spin.setValue(int(cur_min_face))

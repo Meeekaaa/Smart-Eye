@@ -112,6 +112,16 @@ def set_allowed_modules(modules: list[str]) -> None:
         pass
 
 
+def _get_detection_size(default: int = 640) -> tuple[int, int]:
+    try:
+        value = int(db.get_int("insightface_det_size", default) or default)
+    except Exception:
+        value = default
+    value = max(224, min(960, value))
+    value = int(round(value / 32.0) * 32)
+    return (value, value)
+
+
 def _normalize_allowed_modules(modules: list[str] | None, gender_enabled: bool) -> list[str]:
     cleaned = list(REQUIRED_MODULES)
     raw = modules if isinstance(modules, list) else None
@@ -470,7 +480,7 @@ class FaceModel:
                 return app
 
             try:
-                det_size = (224, 224)
+                det_size = _get_detection_size()
                 app = _try_load(providers, det_size)
                 with self._app_lock:
                     self._app = app

@@ -250,6 +250,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('ui_pause_inactive_tabs', '1', 'bool'
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_on_leave', '1', 'bool', 'Unload heavy tabs on leave', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_idle_min', '5', 'int', 'Unload idle tabs after (min)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('auto_pause_live_when_idle', '0', 'bool', 'Auto-stop live cameras when idle', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('detection_interval', '1', 'int', 'Detection Interval', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_enabled', '0', 'bool', 'Save Live Alarm Clips', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_seconds', '5', 'int', 'Live Clip Seconds', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_max_buffer_mb', '128', 'int', 'Live Clip Buffer Limit (MB)', 'performance');
@@ -259,6 +260,18 @@ INSERT OR IGNORE INTO app_settings VALUES ('inference_future_timeout_sec', '2.0'
 INSERT OR IGNORE INTO app_settings VALUES ('adaptive_live_infer_interval', '1', 'bool', 'Adaptive Live Inference Interval', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_infer_interval_min', '1', 'int', 'Live Inference Interval Min', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_infer_interval_max', '2', 'int', 'Live Inference Interval Max', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_infer_dim', '640', 'int', 'Live Inference Size', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_infer_dim_min', '384', 'int', 'Live Inference Size Min', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_infer_dim_max', '768', 'int', 'Live Inference Size Max', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('adaptive_live_infer_dim', '1', 'bool', 'Adaptive Live Inference Size', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('detector_max_infer_dim', '768', 'int', 'Detector Max Inference Size', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('bbox_hold_max_frames', '3', 'int', 'BBox Hold Frames', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('bbox_hold_max_stale_sec', '0.35', 'float', 'BBox Hold Staleness', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('min_face_size', '24', 'int', 'Minimum Face Size', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('insightface_det_size', '640', 'int', 'InsightFace Detector Size', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('object_min_area_ratio', '0.00025', 'float', 'Object Minimum Area Ratio', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('person_weak_detection_confidence', '0.55', 'float', 'Weak Person Confidence', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('person_tiny_area_ratio', '0.006', 'float', 'Tiny Person Area Ratio', 'detection');
 CREATE INDEX IF NOT EXISTS idx_detection_logs_timestamp ON detection_logs (timestamp);
 CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_id ON detection_logs (camera_id);
 CREATE INDEX IF NOT EXISTS idx_known_faces_name ON known_faces (name);

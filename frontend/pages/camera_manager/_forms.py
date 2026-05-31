@@ -189,7 +189,7 @@ class AddCameraPanel(QWidget):
 
         self._min_face_size_spin = QSpinBox()
         self._min_face_size_spin.setRange(10, 500)
-        self._min_face_size_spin.setValue(40)
+        self._min_face_size_spin.setValue(24)
         self._min_face_size_spin.setSuffix(" px")
         self._min_face_size_spin.setStyleSheet(_spin_ss())
         bl.addWidget(_srow("Min Face Size", self._min_face_size_spin))
@@ -231,7 +231,7 @@ class AddCameraPanel(QWidget):
         self._active_plugins_toggle.setChecked(True)
         self._thresh_spin.setValue(45)
         self._max_faces_spin.setValue(16)
-        self._min_face_size_spin.setValue(40)
+        self._min_face_size_spin.setValue(24)
         self._enabled_toggle.setChecked(True)
 
     def _set_busy(self, busy: bool):

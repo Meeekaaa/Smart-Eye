@@ -15,7 +15,7 @@ from backend.pipeline.liveness_manager import LivenessManager
 
 logger = logging.getLogger(__name__)
 
-_MAX_INFER_DIM = 512
+_MAX_INFER_DIM = 768
 
 
 def _scale_frame(frame, max_dim=_MAX_INFER_DIM):
@@ -203,6 +203,22 @@ def _landmark_motion_center(landmarks):
 
 def _shift_bbox(box, dx, dy):
     return [float(box[0]) + dx, float(box[1]) + dy, float(box[2]) + dx, float(box[3]) + dy]
+
+
+def _clip_bbox_to_shape(box, frame_shape):
+    try:
+        if frame_shape is None:
+            return [int(round(v)) for v in box]
+        h, w = frame_shape[:2]
+        x1 = max(0.0, min(float(w - 1), float(box[0])))
+        y1 = max(0.0, min(float(h - 1), float(box[1])))
+        x2 = max(0.0, min(float(w - 1), float(box[2])))
+        y2 = max(0.0, min(float(h - 1), float(box[3])))
+        if x2 - x1 < 2.0 or y2 - y1 < 2.0:
+            return None
+        return [int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))]
+    except Exception:
+        return None
 
 
 def _match_score(prev_box, curr_box, vx=0.0, vy=0.0):
@@ -556,7 +572,11 @@ class DetectorManager:
             except Exception:
                 max_dim = 480
             return _scale_frame(frame, max_dim=max_dim)
-        return _scale_frame(frame, max_dim=_MAX_INFER_DIM)
+        try:
+            max_dim = int(config.get("detector_max_infer_dim", _MAX_INFER_DIM) or _MAX_INFER_DIM)
+        except Exception:
+            max_dim = _MAX_INFER_DIM
+        return _scale_frame(frame, max_dim=max(320, min(1024, max_dim)))
 
     def _run_face_detection(self, camera_id, small, scale):
         t0 = time.time()
@@ -564,9 +584,9 @@ class DetectorManager:
         try:
             min_face_size = int(db.get_setting(f"camera_{camera_id}_min_face_size", None) or 0)
             if min_face_size <= 0:
-                min_face_size = int(config.get("min_face_size", 40) or 40)
+                min_face_size = int(config.get("min_face_size", 24) or 24)
         except Exception:
-            min_face_size = 40
+            min_face_size = 24
         results = []
         for face in faces:
             face["bbox"] = _scale_bbox_up(face["bbox"], scale)
@@ -836,17 +856,17 @@ class DetectorManager:
         face_boxes = [f.get("bbox") for f in faces or [] if f.get("bbox")]
 
         try:
-            min_area_ratio = max(0.0, float(config.get("object_min_area_ratio", 0.00045) or 0.00045))
+            min_area_ratio = max(0.0, float(config.get("object_min_area_ratio", 0.00025) or 0.00025))
         except Exception:
-            min_area_ratio = 0.00045
+            min_area_ratio = 0.00025
         try:
-            weak_person_conf = max(0.0, min(1.0, float(config.get("person_weak_detection_confidence", 0.65) or 0.65)))
+            weak_person_conf = max(0.0, min(1.0, float(config.get("person_weak_detection_confidence", 0.55) or 0.55)))
         except Exception:
-            weak_person_conf = 0.65
+            weak_person_conf = 0.55
         try:
-            tiny_person_area = max(0.0, float(config.get("person_tiny_area_ratio", 0.018) or 0.018))
+            tiny_person_area = max(0.0, float(config.get("person_tiny_area_ratio", 0.006) or 0.006))
         except Exception:
-            tiny_person_area = 0.018
+            tiny_person_area = 0.006
 
         filtered = []
         dropped = 0
@@ -965,19 +985,28 @@ class DetectorManager:
                     cand.extend(grid[cell])
         return cand
 
-    def _apply_smoothing(self, camera_id, faces, objects):
+    def _apply_smoothing(self, camera_id, faces, objects, frame_shape=None):
         state = self._get_camera_state(camera_id)
         stable_raw = config.get("experimental_object_bbox_stabilization", True)
         if isinstance(stable_raw, str):
             use_stable_object_bboxes = stable_raw.strip().lower() in ("1", "true", "yes", "on")
         else:
             use_stable_object_bboxes = bool(stable_raw)
+        try:
+            hold_frames = max(0, int(config.get("bbox_hold_max_frames", 3) or 3))
+        except Exception:
+            hold_frames = 3
+        try:
+            hold_stale_sec = max(0.0, float(config.get("bbox_hold_max_stale_sec", 0.35) or 0.35))
+        except Exception:
+            hold_stale_sec = 0.35
         with state.smoothing_lock:
             prev = state.smoothing_state
             now = time.time()
 
             new_face_state = []
             face_grid, face_bucket = self._build_grid(prev.get("faces", []))
+            matched_face_entries = set()
 
             for f in faces:
                 curr_box = f.get("bbox")
@@ -1025,6 +1054,8 @@ class DetectorManager:
                         min_iou=0.08,
                         max_rel_dist=3.2,
                     )
+                if matched is not None:
+                    matched_face_entries.add(id(matched))
 
                 vx = vy = 0.0
                 if matched and matched.get("bbox"):
@@ -1106,11 +1137,50 @@ class DetectorManager:
                         "_gender": f.get("gender", "unknown"),
                         "_gender_conf": f.get("gender_confidence", 0.0),
                         "lm_center": _landmark_motion_center(f.get("landmarks")),
+                        "misses": 0,
                     }
                 )
 
+            if hold_frames > 0 and hold_stale_sec > 0.0:
+                for p in prev.get("faces", []):
+                    if id(p) in matched_face_entries or not p.get("bbox"):
+                        continue
+                    misses = int(p.get("misses", 0) or 0) + 1
+                    age = now - float(p.get("last_seen", now) or now)
+                    if misses > hold_frames or age > hold_stale_sec:
+                        continue
+                    vx = _as_float(p.get("vx", 0.0)) * 0.82
+                    vy = _as_float(p.get("vy", 0.0)) * 0.82
+                    pred_box = _clip_bbox_to_shape(_shift_bbox(p["bbox"], vx, vy), frame_shape)
+                    if not pred_box:
+                        continue
+                    pred_face = {
+                        "bbox": pred_box,
+                        "identity": p.get("_ident_info"),
+                        "confidence": max(0.0, _as_float(p.get("_confidence"), _as_float(p.get("_det_score"))) * 0.86),
+                        "det_score": max(0.0, _as_float(p.get("_det_score")) * 0.80),
+                        "embedding": None,
+                        "liveness": p.get("_liveness", 1.0),
+                        "gender": p.get("_gender", "unknown"),
+                        "gender_confidence": p.get("_gender_conf", 0.0),
+                        "track_vx": vx,
+                        "track_vy": vy,
+                        "_coasted": True,
+                    }
+                    faces.append(pred_face)
+                    new_face_state.append(
+                        {
+                            **p,
+                            "bbox": pred_box,
+                            "vx": vx,
+                            "vy": vy,
+                            "misses": misses,
+                        }
+                    )
+
             new_obj_state = []
             obj_grid, obj_bucket = self._build_grid(prev.get("objects", []))
+            matched_obj_entries = set()
 
             for o in objects:
                 curr_box = o.get("bbox")
@@ -1140,6 +1210,8 @@ class DetectorManager:
                     min_iou=0.16,
                     max_rel_dist=2.2,
                 )
+                if matched is not None:
+                    matched_obj_entries.add(id(matched))
 
                 vx = vy = 0.0
                 smooth_box = None
@@ -1220,8 +1292,46 @@ class DetectorManager:
                         "_class_name": o.get("class_name"),
                         "_plugin_name": o.get("plugin_name"),
                         "_det_score": o.get("det_score", 0.0),
+                        "_confidence": o.get("confidence", o.get("det_score", 0.0)),
+                        "misses": 0,
                     }
                 )
+
+            if hold_frames > 0 and hold_stale_sec > 0.0:
+                for p in prev.get("objects", []):
+                    if id(p) in matched_obj_entries or not p.get("bbox"):
+                        continue
+                    misses = int(p.get("misses", 0) or 0) + 1
+                    age = now - float(p.get("last_seen", now) or now)
+                    if misses > hold_frames or age > hold_stale_sec:
+                        continue
+                    vx = _as_float(p.get("vx", 0.0)) * 0.84
+                    vy = _as_float(p.get("vy", 0.0)) * 0.84
+                    pred_box = _clip_bbox_to_shape(_shift_bbox(p["bbox"], vx, vy), frame_shape)
+                    if not pred_box:
+                        continue
+                    pred_obj = {
+                        "bbox": pred_box,
+                        "plugin_id": p.get("plugin"),
+                        "plugin_name": p.get("_plugin_name"),
+                        "class": p.get("class"),
+                        "class_name": p.get("_class_name") or str(p.get("class")),
+                        "confidence": max(0.0, _as_float(p.get("_confidence"), _as_float(p.get("_det_score"))) * 0.84),
+                        "det_score": max(0.0, _as_float(p.get("_det_score")) * 0.78),
+                        "track_vx": vx,
+                        "track_vy": vy,
+                        "_coasted": True,
+                    }
+                    objects.append(pred_obj)
+                    new_obj_state.append(
+                        {
+                            **p,
+                            "bbox": pred_box,
+                            "vx": vx,
+                            "vy": vy,
+                            "misses": misses,
+                        }
+                    )
 
             prev["faces"] = new_face_state
             prev["objects"] = new_obj_state
@@ -1254,14 +1364,14 @@ class DetectorManager:
             self._identify_faces_for_frame(camera_id, faces, aggressive_mode, max_identify, small, frame_idx)
 
         if not lightweight:
-            if faces or objects:
-                self._apply_smoothing(camera_id, faces, objects)
+            self._apply_smoothing(camera_id, faces, objects, frame_shape=frame.shape)
 
             # Evaluate liveness after smoothing so bbox jitter/resets don't
             # break per-face liveness tracks that rely on stable coordinates.
-            if faces and self._liveness is not None:
+            real_faces = [f for f in faces if not f.get("_coasted")]
+            if real_faces and self._liveness is not None:
                 try:
-                    self._evaluate_liveness_for_frame(camera_id, faces, objects, frame, frame_idx)
+                    self._evaluate_liveness_for_frame(camera_id, real_faces, objects, frame, frame_idx)
                 except Exception:
                     logger.debug("Liveness evaluation failed for camera %s", camera_id, exc_info=True)
 

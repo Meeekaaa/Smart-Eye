@@ -408,24 +408,50 @@ class PerformanceTab(QWidget):
         # Plugin profile drives frame/inference pacing defaults.
         if plugin_pref == "cuda":
             db.set_setting("detection_interval", "1")
-            db.set_setting("live_infer_dim", "512")
+            db.set_setting("live_infer_dim", "768")
+            db.set_setting("live_infer_dim_min", "448")
+            db.set_setting("live_infer_dim_max", "896")
+            db.set_setting("detector_max_infer_dim", "896")
             db.set_setting("playback_infer_target_fps", "16")
         elif plugin_pref == "dml":
             db.set_setting("detection_interval", "1")
-            db.set_setting("live_infer_dim", "448")
+            db.set_setting("live_infer_dim", "640")
+            db.set_setting("live_infer_dim_min", "384")
+            db.set_setting("live_infer_dim_max", "768")
+            db.set_setting("detector_max_infer_dim", "768")
             db.set_setting("playback_infer_target_fps", "12")
         elif plugin_pref == "rocm":
             db.set_setting("detection_interval", "1")
-            db.set_setting("live_infer_dim", "512")
+            db.set_setting("live_infer_dim", "768")
+            db.set_setting("live_infer_dim_min", "448")
+            db.set_setting("live_infer_dim_max", "896")
+            db.set_setting("detector_max_infer_dim", "896")
             db.set_setting("playback_infer_target_fps", "14")
         elif plugin_pref == "cpu":
             db.set_setting("detection_interval", "2")
-            db.set_setting("live_infer_dim", "320")
+            db.set_setting("live_infer_dim", "448")
+            db.set_setting("live_infer_dim_min", "320")
+            db.set_setting("live_infer_dim_max", "640")
+            db.set_setting("detector_max_infer_dim", "640")
             db.set_setting("playback_infer_target_fps", "8")
 
         # Face profile drives face-ID throughput defaults.
-        if face_pref in ("cuda", "dml", "rocm"):
+        face_profile = face_pref
+        if face_profile == "auto":
+            supported = self._get_supported_provider_prefs()
+            if "cuda" in supported:
+                face_profile = "cuda"
+            elif "rocm" in supported:
+                face_profile = "rocm"
+            elif "dml" in supported:
+                face_profile = "dml"
+            else:
+                face_profile = "cpu"
+
+        if face_profile in ("cuda", "dml", "rocm"):
             db.set_setting("max_faces_identify_per_frame", "16")
-        elif face_pref == "cpu":
+            db.set_setting("insightface_det_size", "640")
+        elif face_profile == "cpu":
             db.set_setting("max_faces_identify_per_frame", "8")
+            db.set_setting("insightface_det_size", "448")
 
