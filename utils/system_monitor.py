@@ -2,14 +2,13 @@ import contextlib
 import ctypes
 import logging
 import os
-import struct
 import threading
 import time
 
 import psutil
 
 try:
-    from ctypes import byref, c_ulong, c_void_p, windll
+    from ctypes import byref, c_ulong, c_void_p, windll, wintypes
 except Exception:
     windll = None
 
@@ -267,8 +266,26 @@ class SystemMonitor:
         return min(total, 100.0), self._gpu_name_cached
 
     def _pdh_gpu_util(self):
+        val = self._pdh_gpu_util_native()
+        if val is not None:
+            return val
+        return self._pdh_gpu_util_powershell()
+
+    def _pdh_gpu_util_native(self):
         PDH_FMT_DOUBLE = 0x00000200
         PDH_MORE_DATA = 0x800007D2
+
+        class _PdhFmtCounterValueDouble(ctypes.Structure):
+            _fields_ = [
+                ("CStatus", wintypes.DWORD),
+                ("doubleValue", ctypes.c_double),
+            ]
+
+        class _PdhFmtCounterValueItemW(ctypes.Structure):
+            _fields_ = [
+                ("szName", wintypes.LPWSTR),
+                ("FmtValue", _PdhFmtCounterValueDouble),
+            ]
 
         try:
             query = c_void_p()
@@ -292,35 +309,38 @@ class SystemMonitor:
             item_count = c_ulong(0)
             res = windll.pdh.PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, byref(buf_size), byref(item_count), None)
 
-            if res not in (PDH_MORE_DATA, 0):
+            if (res & 0xFFFFFFFF) not in (PDH_MORE_DATA, 0):
                 windll.pdh.PdhCloseQuery(query)
                 return None
 
-            buf = (ctypes.c_byte * buf_size.value)()
-            res = windll.pdh.PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, byref(buf_size), byref(item_count), buf)
+            if item_count.value <= 0:
+                windll.pdh.PdhCloseQuery(query)
+                return None
+
+            buffer = ctypes.create_string_buffer(buf_size.value)
+            res = windll.pdh.PdhGetFormattedCounterArrayW(counter, PDH_FMT_DOUBLE, byref(buf_size), byref(item_count), buffer)
             windll.pdh.PdhCloseQuery(query)
 
             if res != 0:
                 return None
 
-            ptr_size = ctypes.sizeof(ctypes.c_void_p)
-            item_size = ptr_size + 4 + 8
-            raw = bytes(buf)
-            fmt = "Q" if ptr_size == 8 else "I"
-
             engine_totals = {}
 
+            item_size = ctypes.sizeof(_PdhFmtCounterValueItemW)
+            raw_len = len(buffer.raw)
             for i in range(item_count.value):
                 offset = i * item_size
-                if offset + item_size > len(raw):
+                if offset + item_size > raw_len:
                     break
-                name_ptr = struct.unpack(fmt, raw[offset : offset + ptr_size])[0]
+                item = _PdhFmtCounterValueItemW.from_buffer_copy(buffer.raw, offset)
                 try:
-                    name = ctypes.wstring_at(name_ptr).lower()
+                    name = str(item.szName or "").lower()
                 except Exception:
                     name = ""
-                double_offset = offset + ptr_size + 4
-                val = struct.unpack("d", raw[double_offset : double_offset + 8])[0]
+                try:
+                    val = float(item.FmtValue.doubleValue)
+                except Exception:
+                    val = 0.0
 
                 engtype = "other"
                 if "engtype_" in name:
@@ -333,6 +353,9 @@ class SystemMonitor:
         except Exception:
             logger.debug("PDH GPU array query failed", exc_info=True)
 
+        return None
+
+    def _pdh_gpu_util_powershell(self):
         try:
             import json
             import subprocess
