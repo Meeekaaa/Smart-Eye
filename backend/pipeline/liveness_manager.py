@@ -370,7 +370,9 @@ class LivenessManager:
                 face_confidence=float(face.get("_confidence") or face.get("confidence") or 0.0),
                 detections=det_payload,
                 rules_triggered=["LivenessFailure"],
-                alarm_level=2,
+                # Liveness failures are face-verification events, not rule
+                # alarms. Keep the log/snapshot without driving popup alerts.
+                alarm_level=0,
                 snapshot_path=snap_path,
             )
         except Exception:
