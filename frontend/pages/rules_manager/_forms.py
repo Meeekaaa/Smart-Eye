@@ -82,6 +82,8 @@ class _BaseRuleForm(QWidget):
         self._condition_rows: list[ConditionRow] = []
         self._alarm_vbox: QVBoxLayout | None = None
         self._cond_vbox: QVBoxLayout | None = None
+        self._alarm_divider: QWidget | None = None
+        self._alarm_pad: QWidget | None = None
 
     def _make_banner(self) -> QWidget:
         raise NotImplementedError
@@ -176,6 +178,7 @@ class _BaseRuleForm(QWidget):
         self._e_action = QComboBox()
         self._e_action.addItems(["alarm", "suppress", "log_only"])
         self._e_action.setStyleSheet(_combo_ss())
+        self._e_action.currentTextChanged.connect(lambda _text: self._sync_alarm_section())
         body_l.addWidget(_srow("Action", self._e_action))
 
         self._e_camera = QComboBox()
@@ -244,8 +247,10 @@ class _BaseRuleForm(QWidget):
             self._no_cond_lbl.show()
 
     def _build_alarms_section(self, body_l: QVBoxLayout):
-        body_l.addWidget(_make_sdiv("Alarm Escalation"))
+        self._alarm_divider = _make_sdiv("Alarm Escalation")
+        body_l.addWidget(self._alarm_divider)
         alarm_pad = QWidget()
+        self._alarm_pad = alarm_pad
         alarm_pad.setStyleSheet("background:transparent;")
         alarm_lay = QVBoxLayout(alarm_pad)
         alarm_lay.setContentsMargins(SPACE_18, SPACE_14, SPACE_18, SPACE_14)
@@ -266,6 +271,13 @@ class _BaseRuleForm(QWidget):
         self._alarm_vbox.addWidget(self._no_alarm_lbl)
         alarm_lay.addLayout(self._alarm_vbox)
         body_l.addWidget(alarm_pad)
+        self._sync_alarm_section()
+
+    def _sync_alarm_section(self):
+        visible = getattr(self, "_e_action", None) is not None and self._e_action.currentText() == "alarm"
+        for widget in (self._alarm_divider, self._alarm_pad):
+            if widget is not None:
+                widget.setVisible(visible)
 
     def _add_alarm_card(self, data: dict | None = None):
         if data is None:
@@ -296,6 +308,8 @@ class _BaseRuleForm(QWidget):
         return [r.get_data() for r in self._condition_rows if r.get_data()["attribute"] and r.get_data()["value"]]
 
     def _collect_alarms(self) -> list[dict]:
+        if getattr(self, "_e_action", None) is not None and self._e_action.currentText() != "alarm":
+            return []
         return [c.get_data() for c in self._alarm_cards]
 
 

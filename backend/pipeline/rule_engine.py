@@ -34,53 +34,96 @@ def _should_evaluate_unknown(attr: str, operator: str, expected) -> bool:
     return str(expected or "").strip().lower() == "unknown"
 
 
+def _active_objects(state: dict) -> list[dict]:
+    objects = state.get("object_bboxes", []) or []
+    active = []
+    for obj in objects:
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("_coasted") or obj.get("_weak_track_recovery"):
+            continue
+        if obj.get("_track_confirmed", True) is False:
+            continue
+        active.append(obj)
+    return active
+
+
+def _object_classes(objects: list[dict]) -> set[str]:
+    return {str(o.get("class_name") or o.get("class") or "").lower() for o in objects}
+
+
+def _rule_action(rule: dict) -> str:
+    return str(rule.get("action") or "").strip().lower()
+
+
+def _rule_logic(rule: dict) -> str:
+    logic = str(rule.get("logic") or "AND").strip().upper()
+    return logic if logic in ("AND", "OR") else "AND"
+
+
+def _rule_priority(rule: dict) -> int:
+    try:
+        return int(rule.get("priority", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _compile_condition(cond):
     attr = cond["attribute"]
     op = _normalize_operator(cond["operator"])
     expected = _normalize_attr_value(attr, cond["value"])
-    is_obj = attr in ("object", "objects") or attr.startswith("object.") or attr.startswith("object:")
+    is_obj_count = attr == "objects"
+    is_obj_class = attr == "object" or attr.startswith("object.") or attr.startswith("object:")
 
-    if is_obj:
+    if is_obj_count:
         try:
             exp_num = float(expected)
-            if op == "eq":
-
-                def check_fn(objs, _e=exp_num):
-                    return len(objs) == _e
-            elif op == "neq":
-
-                def check_fn(objs, _e=exp_num):
-                    return len(objs) != _e
-            elif op == "gt":
-
-                def check_fn(objs, _e=exp_num):
-                    return len(objs) > _e
-            elif op == "lt":
-
-                def check_fn(objs, _e=exp_num):
-                    return len(objs) < _e
-            elif op == "gte":
-
-                def check_fn(objs, _e=exp_num):
-                    return len(objs) >= _e
-            elif op == "lte":
-
-                def check_fn(objs, _e=exp_num):
-                    return len(objs) <= _e
-            else:
-                check_fn = None
         except (ValueError, TypeError):
-            _es = str(expected).lower()
-            if op in ("eq", "contains"):
+            return (attr, True, None, False)
+        if op == "eq":
 
-                def check_fn(objs, _e=_es):
-                    return _e in {str(o.get("class_name") or o.get("class") or "").lower() for o in objs}
-            elif op == "neq":
+            def check_fn(objs, _e=exp_num):
+                return len(objs) == _e
+        elif op == "neq":
 
-                def check_fn(objs, _e=_es):
-                    return _e not in {str(o.get("class_name") or o.get("class") or "").lower() for o in objs}
-            else:
-                check_fn = None
+            def check_fn(objs, _e=exp_num):
+                return len(objs) != _e
+        elif op == "gt":
+
+            def check_fn(objs, _e=exp_num):
+                return len(objs) > _e
+        elif op == "lt":
+
+            def check_fn(objs, _e=exp_num):
+                return len(objs) < _e
+        elif op == "gte":
+
+            def check_fn(objs, _e=exp_num):
+                return len(objs) >= _e
+        elif op == "lte":
+
+            def check_fn(objs, _e=exp_num):
+                return len(objs) <= _e
+        else:
+            check_fn = None
+        return (attr, True, check_fn, False)
+
+    if is_obj_class:
+        _es = str(expected).strip().lower()
+        if op == "eq":
+
+            def check_fn(objs, _e=_es):
+                return _e in _object_classes(objs)
+        elif op == "neq":
+
+            def check_fn(objs, _e=_es):
+                return _e not in _object_classes(objs)
+        elif op == "contains":
+
+            def check_fn(objs, _e=_es):
+                return any(_e in cls for cls in _object_classes(objs))
+        else:
+            check_fn = None
         return (attr, True, check_fn, False)
 
     try:
@@ -184,60 +227,74 @@ class RuleEngine:
             self._compiled_cache[rule_id] = (now, compiled)
         return compiled
 
+    def _conditions_pass(self, compiled, state):
+        objs = _active_objects(state)
+        detections = state.get("detections", {})
+        results = []
+        for item in compiled:
+            if len(item) == 4:
+                attr, is_obj, check_fn, allow_unknown_eval = item
+            else:
+                attr, is_obj, check_fn = item
+                allow_unknown_eval = False
+            if check_fn is None:
+                results.append(None)
+                continue
+            if is_obj:
+                try:
+                    results.append(check_fn(objs))
+                except Exception:
+                    results.append(None)
+            else:
+                actual = _normalize_attr_value(attr, detections.get(attr))
+                if (actual is None or actual == "unknown") and not allow_unknown_eval:
+                    results.append(None)
+                    continue
+                if actual is None:
+                    actual = "unknown"
+                try:
+                    results.append(check_fn(actual))
+                except Exception:
+                    results.append(None)
+        valid_results = [r for r in results if r is not None]
+        if not valid_results:
+            return False
+        has_unknown = any(r is None for r in results)
+        return results, valid_results, has_unknown
+
     def evaluate_rules(self, state, camera_id=None):
         rules = self._get_rules_cached(enabled_only=True, camera_id=camera_id)
         triggered = []
-        suppressed = set()
-        sorted_rules = sorted(rules, key=lambda r: r.get("priority", 0), reverse=True)
-        objs = state.get("object_bboxes", []) or []
-        detections = state.get("detections", {})
+        suppress_priority = None
+        sorted_rules = sorted(
+            rules,
+            key=lambda r: (_rule_priority(r), 1 if _rule_action(r) == "suppress" else 0, -int(r.get("id", 0) or 0)),
+            reverse=True,
+        )
         for rule in sorted_rules:
             compiled = self._get_compiled_conditions_cached(rule["id"])
             if not compiled:
                 continue
-            results = []
-            for item in compiled:
-                if len(item) == 4:
-                    attr, is_obj, check_fn, allow_unknown_eval = item
-                else:
-                    attr, is_obj, check_fn = item
-                    allow_unknown_eval = False
-                if check_fn is None:
-                    results.append(None)
-                    continue
-                if is_obj:
-                    try:
-                        results.append(check_fn(objs))
-                    except Exception:
-                        results.append(None)
-                else:
-                    actual = _normalize_attr_value(attr, detections.get(attr))
-                    if (actual is None or actual == "unknown") and not allow_unknown_eval:
-                        results.append(None)
-                        continue
-                    if actual is None:
-                        actual = "unknown"
-                    try:
-                        results.append(check_fn(actual))
-                    except Exception:
-                        results.append(None)
-            valid_results = [r for r in results if r is not None]
-            if not valid_results:
+            match_result = self._conditions_pass(compiled, state)
+            if not match_result:
                 continue
-            logic = rule.get("logic", "AND")
-            has_unknown = any(r is None for r in results)
+            results, valid_results, has_unknown = match_result
+            logic = _rule_logic(rule)
             if logic == "AND":
                 # Fail closed for AND rules when any condition is unknown.
                 passed = (not has_unknown) and all(valid_results)
             else:
                 passed = any(valid_results)
-            if passed:
-                if rule["action"] == "suppress":
-                    suppressed.add(int(rule["id"]))
-                else:
-                    triggered.append(rule)
-        final = [r for r in triggered if int(r["id"]) not in suppressed]
-        return final
+            if not passed:
+                continue
+            priority = _rule_priority(rule)
+            if _rule_action(rule) == "suppress":
+                suppress_priority = priority if suppress_priority is None else max(suppress_priority, priority)
+                continue
+            if suppress_priority is not None and priority <= suppress_priority:
+                continue
+            triggered.append(rule)
+        return triggered
 
 
 def _evaluate_condition(actual, operator, expected):
@@ -280,30 +337,37 @@ def _evaluate_condition(actual, operator, expected):
 
 def _evaluate_object_condition(objects, operator, expected):
     operator = _normalize_operator(operator)
+    exp_str = str(expected).strip().lower()
+    classes = _object_classes(objects)
+    if operator == "eq":
+        return exp_str in classes
+    if operator == "neq":
+        return exp_str not in classes
+    if operator == "contains":
+        return any(exp_str in cls for cls in classes)
+    return False
+
+
+def _evaluate_object_count_condition(objects, operator, expected):
+    operator = _normalize_operator(operator)
     try:
         exp_num = float(expected)
-        cnt = len(objects)
-        if operator == "eq":
-            return cnt == exp_num
-        if operator == "neq":
-            return cnt != exp_num
-        if operator == "gt":
-            return cnt > exp_num
-        if operator == "lt":
-            return cnt < exp_num
-        if operator == "gte":
-            return cnt >= exp_num
-        if operator == "lte":
-            return cnt <= exp_num
+    except (TypeError, ValueError):
         return False
-    except Exception:
-        exp_str = str(expected).lower()
-        classes = {str(o.get("class_name") or o.get("class") or "").lower() for o in objects}
-        if operator in ("eq", "contains"):
-            return exp_str in classes
-        if operator == "neq":
-            return exp_str not in classes
-        return False
+    cnt = len(objects)
+    if operator == "eq":
+        return cnt == exp_num
+    if operator == "neq":
+        return cnt != exp_num
+    if operator == "gt":
+        return cnt > exp_num
+    if operator == "lt":
+        return cnt < exp_num
+    if operator == "gte":
+        return cnt >= exp_num
+    if operator == "lte":
+        return cnt <= exp_num
+    return False
 
 
 def simulate_rule(rule_id, state):
@@ -315,11 +379,17 @@ def simulate_rule(rule_id, state):
     details = []
     for cond in conditions:
         attr = cond["attribute"]
-        if attr in ("object", "objects") or attr.startswith("object.") or attr.startswith("object:"):
-            objs = state.get("object_bboxes", []) or []
-            match = _evaluate_object_condition(objs, cond["operator"], cond["value"])
+        if attr == "objects":
+            objs = _active_objects(state)
+            match = _evaluate_object_count_condition(objs, cond["operator"], cond["value"])
             results.append(match)
             details.append(f"{attr} {cond['operator']} {cond['value']} => {match} (objects: {len(objs)})")
+            continue
+        if attr == "object" or attr.startswith("object.") or attr.startswith("object:"):
+            objs = _active_objects(state)
+            match = _evaluate_object_condition(objs, cond["operator"], cond["value"])
+            results.append(match)
+            details.append(f"{attr} {cond['operator']} {cond['value']} => {match} (active objects: {len(objs)})")
             continue
         actual = _normalize_attr_value(attr, state.get("detections", {}).get(attr))
         expected = _normalize_attr_value(attr, cond["value"])
@@ -335,7 +405,7 @@ def simulate_rule(rule_id, state):
     valid = [r for r in results if r is not None]
     if not valid:
         return False, "All conditions skipped"
-    logic = rule.get("logic", "AND")
+    logic = _rule_logic(rule)
     has_unknown = any(r is None for r in results)
     if logic == "AND":
         passed = (not has_unknown) and all(valid)

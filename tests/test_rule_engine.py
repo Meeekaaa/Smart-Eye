@@ -38,3 +38,33 @@ def test_object_class_and_count_conditions(temp_db):
     triggered = rule_engine.evaluate_rules(state, camera_id=cam_id)
 
     assert [rule["name"] for rule in triggered] == ["Person class", "Object count"]
+
+
+def test_suppress_rule_blocks_lower_priority_alarm(temp_db):
+    cam_id = temp_db.add_camera("Cam 1", "debug://cam/1")
+    alarm_id = temp_db.add_rule("Alarm Alice", "", "AND", "alarm", priority=10, camera_id=cam_id)
+    temp_db.add_rule_condition(alarm_id, "identity", "eq", "Alice")
+    suppress_id = temp_db.add_rule("Suppress Alice", "", "AND", "suppress", priority=20, camera_id=cam_id)
+    temp_db.add_rule_condition(suppress_id, "identity", "eq", "Alice")
+
+    triggered = rule_engine.evaluate_rules({"detections": {"identity": "Alice"}, "object_bboxes": []}, camera_id=cam_id)
+
+    assert triggered == []
+
+
+def test_object_count_ignores_coasted_or_unconfirmed_objects(temp_db):
+    cam_id = temp_db.add_camera("Cam 1", "debug://cam/1")
+    count_rule_id = temp_db.add_rule("Two active objects", "", "AND", "alarm", priority=10, camera_id=cam_id)
+    temp_db.add_rule_condition(count_rule_id, "objects", "gte", "2")
+
+    state = {
+        "detections": {},
+        "object_bboxes": [
+            {"class_name": "person"},
+            {"class_name": "forklift", "_coasted": True},
+            {"class_name": "helmet", "_track_confirmed": False},
+        ],
+    }
+    triggered = rule_engine.evaluate_rules(state, camera_id=cam_id)
+
+    assert triggered == []

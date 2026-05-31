@@ -23,6 +23,44 @@ def test_rule_validation_rejects_empty_condition_value():
         raise AssertionError("Expected empty rule condition value to be rejected")
 
 
+def test_rule_validation_rejects_empty_condition_list():
+    service = RulesService()
+
+    try:
+        service.validate_conditions([])
+    except ValueError as exc:
+        assert "at least one condition" in str(exc)
+    else:
+        raise AssertionError("Expected condition-less rules to be rejected")
+
+
+def test_rule_validation_accepts_popup_alarm_action():
+    RulesService().validate_alarms(
+        [{"action_type": "popup", "escalation_level": 1, "trigger_after_sec": 0, "cooldown_sec": 10}]
+    )
+
+
+def test_log_only_rule_does_not_persist_alarm_actions(temp_db):
+    service = RulesService()
+    rule_id = service.save_rule(
+        None,
+        data={"name": "Log known person", "logic": "AND", "action": "log_only", "enabled": True},
+        conditions=[{"attribute": "identity", "operator": "eq", "value": "Alice"}],
+        alarms=[
+            {
+                "action_type": "sound",
+                "action_value": "frontend/assets/sounds/alarm_level_1.wav|0.80",
+                "escalation_level": 1,
+                "trigger_after_sec": 0,
+                "cooldown_sec": 10,
+            }
+        ],
+    )
+
+    assert temp_db.get_rule(rule_id)["action"] == "log_only"
+    assert temp_db.get_alarm_actions(rule_id) == []
+
+
 def test_notification_target_validation():
     assert validate_notification_target("email", "operator@gmail.com") == ""
     assert "valid HTTP" in validate_notification_target("webhook", "ftp://example.com/hook")

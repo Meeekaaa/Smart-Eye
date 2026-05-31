@@ -358,9 +358,14 @@ class _IdentityPicker(QWidget):
     def get_value(self) -> str:
         use_uuid = self._uuid_btn.isChecked()
         data = self._combo.currentData()
-        if isinstance(data, tuple) and (data[0] or data[1]):
+        text = self._combo.currentText().strip()
+        if isinstance(data, tuple):
+            if not (data[0] or data[1]):
+                if self._combo.currentIndex() >= 0 and text != self._combo.itemText(self._combo.currentIndex()).strip():
+                    return text
+                return ""
             return (data[1] or data[0]) if use_uuid else (data[0] or data[1])
-        return self._combo.currentText().strip()
+        return text
 
 
 class _ObjectClassPicker(QWidget):
@@ -417,7 +422,37 @@ class _ObjectClassPicker(QWidget):
 
     def get_value(self) -> str:
         data = self._combo.currentData()
-        return data if data else self._combo.currentText().strip()
+        text = self._combo.currentText().strip()
+        if data:
+            return str(data)
+        if (
+            self._combo.currentIndex() >= 0
+            and self._combo.itemData(self._combo.currentIndex()) == ""
+            and text == self._combo.itemText(self._combo.currentIndex()).strip()
+        ):
+            return ""
+        return text
+
+
+class _ObjectCountPicker(QWidget):
+    def __init__(self, initial_value: str = "", parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background:transparent;")
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+
+        self._spin = QSpinBox()
+        self._spin.setRange(0, 999)
+        self._spin.setStyleSheet(_spin_ss())
+        self._spin.setToolTip("Number of active object detections in the frame")
+        try:
+            self._spin.setValue(max(0, int(float(str(initial_value or "0")))))
+        except (TypeError, ValueError):
+            self._spin.setValue(0)
+        h.addWidget(self._spin, stretch=1)
+
+    def get_value(self) -> str:
+        return str(self._spin.value())
 
 
 class _GenderPicker(QWidget):
@@ -441,6 +476,22 @@ class _GenderPicker(QWidget):
 
 class ConditionRow(QFrame):
     remove_requested = Signal(object)
+
+    _OPS = [
+        ("equals", "eq"),
+        ("not equals", "neq"),
+        ("contains", "contains"),
+        ("greater than", "gt"),
+        ("less than", "lt"),
+        ("greater than or equal", "gte"),
+        ("less than or equal", "lte"),
+    ]
+    _OPS_BY_ATTR = {
+        "identity": ("eq", "neq", "contains"),
+        "gender": ("eq", "neq"),
+        "object": ("eq", "neq", "contains"),
+        "objects": ("eq", "neq", "gt", "lt", "gte", "lte"),
+    }
 
     def __init__(self, attribute="object", operator="eq", value="", parent=None):
         super().__init__(parent)
@@ -475,24 +526,10 @@ class ConditionRow(QFrame):
                     break
         self._attr.setStyleSheet(_combo_ss())
 
-        _OPS = [
-            ("equals", "eq"),
-            ("not equals", "neq"),
-            ("contains", "contains"),
-            ("greater than", "gt"),
-            ("less than", "lt"),
-            ("greater than or equal", "gte"),
-            ("less than or equal", "lte"),
-        ]
         self._op = QComboBox()
-        for label, key in _OPS:
-            self._op.addItem(label, key)
-        for i in range(self._op.count()):
-            if self._op.itemData(i) == operator:
-                self._op.setCurrentIndex(i)
-                break
         self._op.setFixedWidth(SIZE_FIELD_W_SM)
         self._op.setStyleSheet(_combo_ss())
+        self._set_operator_options(str(self._attr.currentData() or ""), operator)
 
         self._val_stack = AnimatedStackedWidget()
         self._val_stack.setStyleSheet("background:transparent;")
@@ -509,6 +546,8 @@ class ConditionRow(QFrame):
         self._val_stack.addWidget(self._val_object)
         self._val_gender = _GenderPicker(value)
         self._val_stack.addWidget(self._val_gender)
+        self._val_count = _ObjectCountPicker(value)
+        self._val_stack.addWidget(self._val_count)
 
         self._attr.currentIndexChanged.connect(lambda _idx: self._on_attr_changed(str(self._attr.currentData() or "")))
         from PySide6.QtCore import QTimer
@@ -531,13 +570,31 @@ class ConditionRow(QFrame):
         row.addWidget(self._val_stack, stretch=2)
         row.addWidget(remove)
 
+    def _set_operator_options(self, attr: str, preferred: str | None = None):
+        current = preferred or self._op.currentData() or "eq"
+        allowed = set(self._OPS_BY_ATTR.get(attr, ("eq", "neq")))
+        self._op.blockSignals(True)
+        self._op.clear()
+        for label, key in self._OPS:
+            if key in allowed:
+                self._op.addItem(label, key)
+        target = str(current)
+        idx = self._op.findData(target)
+        if idx < 0:
+            idx = self._op.findData("gte" if attr == "objects" else "eq")
+        self._op.setCurrentIndex(max(0, idx))
+        self._op.blockSignals(False)
+
     def _on_attr_changed(self, attr: str):
+        self._set_operator_options(attr)
         if attr == "identity":
             self._val_stack.setCurrentIndex(1)
         elif attr == "gender":
             self._val_stack.setCurrentIndex(3)
-        elif attr in ("object", "objects"):
+        elif attr == "object":
             self._val_stack.setCurrentIndex(2)
+        elif attr == "objects":
+            self._val_stack.setCurrentIndex(4)
         else:
             self._val_stack.setCurrentIndex(0)
 
@@ -547,8 +604,10 @@ class ConditionRow(QFrame):
             val = self._val_identity.get_value()
         elif attr == "gender":
             val = self._val_gender.get_value()
-        elif attr in ("object", "objects"):
+        elif attr == "object":
             val = self._val_object.get_value()
+        elif attr == "objects":
+            val = self._val_count.get_value()
         else:
             val = self._val_text.text().strip()
         return {
