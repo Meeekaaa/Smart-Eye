@@ -460,10 +460,6 @@ class DetectorManager:
         if entry is None:
             return [], 0.0
         model = entry["model"]
-        t0 = time.time()
-        detections = model.detect(small) or []
-
-        logger.debug("Plugin %s raw detections: %d", pid, len(detections))
 
         global_classes = {int(c.get("class_index")): c for c in entry.get("classes", [])}
 
@@ -475,6 +471,70 @@ class DetectorManager:
         overrides = {int(r.get("class_index")): r for r in cam_over}
 
         plugin_conf = entry.get("info", {}).get("confidence", 0.5)
+        try:
+            tracker_low_abs = max(0.01, min(1.0, float(config.get("object_tracker_low_confidence", 0.10) or 0.10)))
+        except Exception:
+            tracker_low_abs = 0.10
+        try:
+            tracker_low_ratio = max(0.05, min(1.0, float(config.get("object_tracker_low_confidence_ratio", 0.45) or 0.45)))
+        except Exception:
+            tracker_low_ratio = 0.45
+        try:
+            new_track_floor = max(0.01, min(1.0, float(config.get("object_tracker_new_track_confidence", 0.35) or 0.35)))
+        except Exception:
+            new_track_floor = 0.35
+
+        def _effective_class_conf(cls_index):
+            effective = dict(global_classes.get(int(cls_index), {}))
+            if int(cls_index) in overrides:
+                over = overrides[int(cls_index)]
+                try:
+                    effective["enabled"] = int(over.get("enabled", effective.get("enabled", 1)))
+                except Exception:
+                    effective["enabled"] = effective.get("enabled", 1)
+                if over.get("confidence") is not None:
+                    effective["confidence"] = over.get("confidence")
+
+            if effective.get("enabled", 1) in (0, "0", False):
+                return None
+
+            class_conf = effective.get("confidence")
+            if class_conf is None:
+                try:
+                    class_conf = float(entry.get("info", {}).get("confidence", plugin_conf))
+                except Exception:
+                    class_conf = plugin_conf
+            try:
+                return max(0.0, min(1.0, float(class_conf)))
+            except Exception:
+                return max(0.0, min(1.0, float(plugin_conf or 0.5)))
+
+        class_low_thresholds = []
+        for cls_idx, cls_row in global_classes.items():
+            try:
+                if cls_row.get("enabled", 1) in (0, "0", False) and cls_idx not in overrides:
+                    continue
+                class_conf = _effective_class_conf(cls_idx)
+            except Exception:
+                class_conf = None
+            if class_conf is None:
+                continue
+            class_low_thresholds.append(max(0.01, min(tracker_low_abs, class_conf * tracker_low_ratio)))
+        if not class_low_thresholds:
+            try:
+                class_low_thresholds.append(max(0.01, min(tracker_low_abs, float(plugin_conf) * tracker_low_ratio)))
+            except Exception:
+                class_low_thresholds.append(tracker_low_abs)
+        model_min_conf = min(class_low_thresholds)
+
+        t0 = time.time()
+        try:
+            detections = model.detect(small, min_conf=model_min_conf) or []
+        except TypeError:
+            detections = model.detect(small) or []
+
+        logger.debug("Plugin %s raw detections: %d", pid, len(detections))
+
         filtered = []
 
         for det in detections:
@@ -490,35 +550,24 @@ class DetectorManager:
             except Exception:
                 continue
 
-            effective = dict(global_classes.get(cls, {}))
-
-            if cls in overrides:
-                over = overrides[cls]
-                try:
-                    effective["enabled"] = int(over.get("enabled", effective.get("enabled", 1)))
-                except Exception:
-                    effective["enabled"] = effective.get("enabled", 1)
-                if over.get("confidence") is not None:
-                    effective["confidence"] = over.get("confidence")
-
-            if effective.get("enabled", 1) in (0, "0", False):
+            class_conf = _effective_class_conf(cls)
+            if class_conf is None:
                 continue
 
-            class_conf = effective.get("confidence")
-            if class_conf is None:
-                try:
-                    class_conf = float(entry.get("info", {}).get("confidence", plugin_conf))
-                except Exception:
-                    class_conf = plugin_conf
-
-            if det.get("confidence", 0.0) < float(class_conf):
+            track_low_conf = max(0.01, min(tracker_low_abs, float(class_conf) * tracker_low_ratio))
+            det_conf = float(det.get("confidence", 0.0) or 0.0)
+            if det_conf < track_low_conf:
                 continue
 
             det["plugin_id"] = pid
             det["plugin_name"] = entry.get("info", {}).get("name")
             det["class"] = cls
             det["class_name"] = det.get("class_name") or global_classes.get(cls, {}).get("class_name") or str(cls)
-            det["det_score"] = det.get("confidence", 0.0)
+            det["det_score"] = det_conf
+            det["_track_low_conf"] = det_conf < float(class_conf)
+            det["_display_confidence_threshold"] = float(class_conf)
+            det["_new_track_confidence_threshold"] = max(float(class_conf), new_track_floor)
+            det["_track_low_confidence_threshold"] = float(track_low_conf)
             filtered.append(det)
 
         logger.debug("Plugin %s filtered detections: %d", pid, len(filtered))
@@ -726,6 +775,9 @@ class DetectorManager:
 
             cls_key = _class_name_key(obj.get("class_name") or obj.get("class"))
             conf = _as_float(obj.get("confidence", obj.get("det_score", 0.0)))
+            if obj.get("_track_low_conf"):
+                filtered.append(obj)
+                continue
 
             if cls_key == "person":
                 linked_to_face = any(_face_linked_to_person_box(box, face_box) for face_box in face_boxes)
@@ -801,6 +853,10 @@ class DetectorManager:
             hold_stale_sec = max(0.0, min(0.45, float(config.get("bbox_hold_max_stale_sec", 0.35) or 0.35)))
         except Exception:
             hold_stale_sec = 0.35
+        try:
+            object_confirm_hits = max(1, min(5, int(config.get("object_tracker_confirm_hits", 2) or 2)))
+        except Exception:
+            object_confirm_hits = 2
 
         def _center_size(box):
             cx, cy = _bbox_center(box)
@@ -820,6 +876,15 @@ class DetectorManager:
                 return (item.get("plugin_id"), item.get("class") or item.get("class_id") or item.get("class_name"))
             return None
 
+        def _confirm_hits_required(kind):
+            return 1 if kind == "faces" else object_confirm_hits
+
+        def _is_confirmed(track):
+            try:
+                return int(track.get("hits", 0) or 0) >= int(track.get("confirm_hits_required", 1) or 1)
+            except Exception:
+                return True
+
         def _compatible(kind, track, item):
             if kind == "faces":
                 prev_id = track.get("id")
@@ -838,7 +903,7 @@ class DetectorManager:
             dt = max(0.0, min(0.30, now_ts - float(track.get("last_update", now_ts) or now_ts)))
             return _shift_bbox(box, _as_float(track.get("vx_sec", 0.0)) * dt, _as_float(track.get("vy_sec", 0.0)) * dt)
 
-        def _find_match(kind, tracks, item, used_track_ids, now_ts):
+        def _find_match(kind, tracks, item, used_track_ids, now_ts, recovery=False):
             curr_box = item.get("bbox")
             if not curr_box:
                 return None
@@ -867,8 +932,12 @@ class DetectorManager:
             if best is None:
                 return None
 
-            min_iou = 0.04 if kind == "faces" else 0.10
-            max_rel = 2.8 if kind == "faces" else 1.8
+            if kind == "objects" and recovery:
+                min_iou = 0.18
+                max_rel = 1.10
+            else:
+                min_iou = 0.04 if kind == "faces" else 0.10
+                max_rel = 2.8 if kind == "faces" else 1.8
             if best_iou < min_iou and best_rel > max_rel:
                 return None
             return best
@@ -908,10 +977,13 @@ class DetectorManager:
             item["track_vy_sec"] = _as_float(track.get("vy_sec", 0.0))
             item["track_ts"] = track.get("last_update", time.time())
             item["_track_id"] = track.get("track_id")
+            item["_track_confirmed"] = _is_confirmed(track)
 
         def _updated_track(kind, item, matched, now_ts, next_track_id):
             raw_box = [float(v) for v in item.get("bbox")]
             raw_cx, raw_cy, raw_w, raw_h = _center_size(raw_box)
+            confirm_hits_required = _confirm_hits_required(kind)
+            low_conf_recovery = bool(item.get("_track_low_conf"))
             if matched is None or not matched.get("bbox"):
                 clipped = _clip_bbox_to_shape(raw_box, frame_shape) or [int(round(v)) for v in raw_box]
                 track = {
@@ -926,6 +998,8 @@ class DetectorManager:
                     "last_seen": now_ts,
                     "last_update": now_ts,
                     "misses": 0,
+                    "hits": 1,
+                    "confirm_hits_required": confirm_hits_required,
                     "id": _track_identity(kind, item),
                     "class_key": _track_class(kind, item),
                 }
@@ -974,6 +1048,9 @@ class DetectorManager:
             filt_cx, filt_cy, _, _ = _center_size(filtered_box)
             delta_x = filt_cx - prev_cx
             delta_y = filt_cy - prev_cy
+            hits = int(matched.get("hits", 1) or 1)
+            if not low_conf_recovery:
+                hits = min(255, hits + 1)
 
             track = {
                 **matched,
@@ -986,9 +1063,17 @@ class DetectorManager:
                 "last_seen": now_ts,
                 "last_update": now_ts,
                 "misses": 0,
+                "hits": hits,
+                "confirm_hits_required": confirm_hits_required,
                 "id": _track_identity(kind, item) if _track_identity(kind, item) is not None else matched.get("id"),
                 "class_key": _track_class(kind, item) if kind == "objects" else matched.get("class_key"),
             }
+            if low_conf_recovery:
+                item["_weak_track_recovery"] = True
+                prev_conf = _as_float(matched.get("_confidence"), _as_float(matched.get("_det_score")))
+                item_conf = _as_float(item.get("confidence", item.get("det_score", 0.0)))
+                item["confidence"] = max(item_conf, prev_conf * 0.82)
+                item["det_score"] = max(_as_float(item.get("det_score", item_conf)), _as_float(matched.get("_det_score")) * 0.78)
             _copy_track_metadata(kind, track, item)
             _apply_track_output(item, track, raw_box, filtered_box, delta_x, delta_y)
             return track, next_track_id
@@ -1044,6 +1129,8 @@ class DetectorManager:
                 "last_update": now_ts,
                 "misses": misses,
             }
+            if not _is_confirmed(coasted_track):
+                return coasted_track, None
 
             if kind == "faces":
                 conf = max(0.0, _as_float(track.get("_confidence"), _as_float(track.get("_det_score"))) * (0.78 ** misses))
@@ -1064,6 +1151,7 @@ class DetectorManager:
                     "track_vy_sec": vy_sec,
                     "track_ts": now_ts,
                     "_track_id": track.get("track_id"),
+                    "_track_confirmed": True,
                     "_coasted": True,
                 }
                 return coasted_track, item
@@ -1083,6 +1171,7 @@ class DetectorManager:
                 "track_vy_sec": vy_sec,
                 "track_ts": now_ts,
                 "_track_id": track.get("track_id"),
+                "_track_confirmed": True,
                 "_coasted": True,
             }
             return coasted_track, item
@@ -1090,25 +1179,48 @@ class DetectorManager:
         def _process(kind, detections, previous_tracks, next_track_id, limit):
             used_track_ids = set()
             new_tracks = []
-            for item in detections:
+            visible_items = []
+            source_items = [item for item in detections if item.get("bbox")]
+            high_items = [item for item in source_items if kind == "faces" or not item.get("_track_low_conf")]
+            low_items = [item for item in source_items if kind == "objects" and item.get("_track_low_conf")]
+
+            for item in high_items:
                 if not item.get("bbox"):
                     continue
                 matched = _find_match(kind, previous_tracks, item, used_track_ids, now)
                 if matched is not None:
                     used_track_ids.add(id(matched))
+                elif kind == "objects":
+                    new_thresh = _as_float(item.get("_new_track_confidence_threshold"), _as_float(item.get("_display_confidence_threshold"), 0.0))
+                    if _as_float(item.get("confidence", item.get("det_score", 0.0))) < new_thresh:
+                        continue
                 track, next_track_id = _updated_track(kind, item, matched, now, next_track_id)
                 new_tracks.append(track)
+                if _is_confirmed(track):
+                    visible_items.append(item)
+
+            for item in low_items:
+                matched = _find_match(kind, previous_tracks, item, used_track_ids, now, recovery=True)
+                if matched is None:
+                    continue
+                used_track_ids.add(id(matched))
+                track, next_track_id = _updated_track(kind, item, matched, now, next_track_id)
+                new_tracks.append(track)
+                if _is_confirmed(track):
+                    visible_items.append(item)
 
             for track in previous_tracks:
                 if id(track) in used_track_ids:
                     continue
                 coasted_track, coasted_item = _coast_track(kind, track, now)
-                if coasted_track is None or coasted_item is None:
+                if coasted_track is None:
                     continue
                 new_tracks.append(coasted_track)
-                detections.append(coasted_item)
+                if coasted_item is not None:
+                    visible_items.append(coasted_item)
 
             new_tracks.sort(key=lambda t: float(t.get("last_seen", 0.0) or 0.0), reverse=True)
+            detections[:] = visible_items
             return new_tracks[:limit], next_track_id
 
         with state.smoothing_lock:

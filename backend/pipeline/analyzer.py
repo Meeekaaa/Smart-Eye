@@ -122,7 +122,7 @@ def merge_results(detection_results, camera_id):
     class_colors = _get_class_colors_cached()
     for obj in objects:
         cls = obj["class_name"]
-        if not obj.get("_coasted"):
+        if not obj.get("_coasted") and not obj.get("_weak_track_recovery") and obj.get("_track_confirmed", True):
             if cls not in class_detections:
                 class_detections[cls] = []
             class_detections[cls].append(obj)

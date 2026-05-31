@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 43
+CURRENT_VERSION = 44
 
 
 def apply(conn):
@@ -97,7 +97,28 @@ def apply(conn):
         _migrate_v42(conn)
     if version < 43:
         _migrate_v43(conn)
+    if version < 44:
+        _migrate_v44(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v44(conn):
+    settings = [
+        ("object_tracker_low_confidence", "0.10", "float", "Object Tracker Low Confidence", "detection"),
+        ("object_tracker_low_confidence_ratio", "0.45", "float", "Object Tracker Low Confidence Ratio", "detection"),
+        ("object_tracker_new_track_confidence", "0.35", "float", "Object Tracker New Track Confidence", "detection"),
+        ("object_tracker_confirm_hits", "2", "int", "Object Tracker Confirm Hits", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
     conn.commit()
 
 

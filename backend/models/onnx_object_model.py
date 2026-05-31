@@ -259,7 +259,7 @@ class ONNXObjectModel:
     def _has_preferred_gpu_provider(self) -> bool:
         return any(p and p != "CPUExecutionProvider" for p in self._selected_providers)
 
-    def detect(self, frame):
+    def detect(self, frame, min_conf: float | None = None):
         if not self._loaded:
             return []
         if not self._run_lock.acquire(blocking=False):
@@ -267,15 +267,16 @@ class ONNXObjectModel:
             return []
 
         try:
-            return self._detect_locked(frame)
+            return self._detect_locked(frame, min_conf=min_conf)
         finally:
             self._run_lock.release()
 
-    def _detect_locked(self, frame):
+    def _detect_locked(self, frame, min_conf: float | None = None):
         import cv2
 
         h, w = frame.shape[:2]
         inp_w, inp_h = self._input_shape
+        score_thresh = max(0.0, min(1.0, float(self._confidence if min_conf is None else min_conf)))
 
         img = cv2.dnn.blobFromImage(
             frame,
@@ -318,7 +319,7 @@ class ONNXObjectModel:
                 cls_ids = np.argmax(class_probs, axis=1).astype(np.int32, copy=False)
                 row_idx = np.arange(class_probs.shape[0], dtype=np.int32)
                 cls_scores = class_probs[row_idx, cls_ids]
-                keep = cls_scores >= float(self._confidence)
+                keep = cls_scores >= score_thresh
 
                 if np.any(keep):
                     kept = out[keep]
@@ -348,7 +349,7 @@ class ONNXObjectModel:
 
         if boxes_xywh:
             try:
-                idxs = cv2.dnn.NMSBoxes(boxes_xywh, scores, self._confidence, 0.45)
+                idxs = cv2.dnn.NMSBoxes(boxes_xywh, scores, score_thresh, 0.45)
                 idxs = np.array(idxs).flatten().tolist() if len(idxs) > 0 else []
             except Exception:
                 idxs = list(range(len(boxes_xyxy)))

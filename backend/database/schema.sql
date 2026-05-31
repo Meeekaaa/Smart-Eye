@@ -273,6 +273,10 @@ INSERT OR IGNORE INTO app_settings VALUES ('insightface_det_size', '640', 'int',
 INSERT OR IGNORE INTO app_settings VALUES ('object_min_area_ratio', '0.00025', 'float', 'Object Minimum Area Ratio', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('person_weak_detection_confidence', '0.55', 'float', 'Weak Person Confidence', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('person_tiny_area_ratio', '0.006', 'float', 'Tiny Person Area Ratio', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('object_tracker_low_confidence', '0.10', 'float', 'Object Tracker Low Confidence', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('object_tracker_low_confidence_ratio', '0.45', 'float', 'Object Tracker Low Confidence Ratio', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('object_tracker_new_track_confidence', '0.35', 'float', 'Object Tracker New Track Confidence', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('object_tracker_confirm_hits', '2', 'int', 'Object Tracker Confirm Hits', 'detection');
 CREATE INDEX IF NOT EXISTS idx_detection_logs_timestamp ON detection_logs (timestamp);
 CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_id ON detection_logs (camera_id);
 CREATE INDEX IF NOT EXISTS idx_known_faces_name ON known_faces (name);
