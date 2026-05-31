@@ -236,6 +236,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('smtp_port', '587', 'int', 'SMTP Port
 INSERT OR IGNORE INTO app_settings VALUES ('smtp_user', '', 'string', 'SMTP Username', 'notifications');
 INSERT OR IGNORE INTO app_settings VALUES ('smtp_pass', '', 'string', 'SMTP Password', 'notifications');
 INSERT OR IGNORE INTO app_settings VALUES ('smtp_tls', '1', 'bool', 'Use TLS', 'notifications');
+INSERT OR IGNORE INTO app_settings VALUES ('popup_notifications_enabled', '1', 'bool', 'Popup notifications', 'notifications');
 INSERT OR IGNORE INTO app_settings VALUES ('auto_start_cameras', '0', 'bool', 'Auto-start cameras on launch', 'general');
 INSERT OR IGNORE INTO app_settings VALUES ('auth_onboarded', '0', 'bool', 'Require sign-in on launch', 'general');
 INSERT OR IGNORE INTO app_settings VALUES ('insightface_model_name', 'buffalo_l', 'string', 'Face Model', 'detection');

@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 44
+CURRENT_VERSION = 45
 
 
 def apply(conn):
@@ -99,7 +99,21 @@ def apply(conn):
         _migrate_v43(conn)
     if version < 44:
         _migrate_v44(conn)
+    if version < 45:
+        _migrate_v45(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v45(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("popup_notifications_enabled", "1", "bool", "Popup notifications", "notifications"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        ("bool", "Popup notifications", "notifications", "popup_notifications_enabled"),
+    )
     conn.commit()
 
 

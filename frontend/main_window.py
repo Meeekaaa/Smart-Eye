@@ -621,6 +621,9 @@ class MainWindow(QMainWindow):
                 return
             count = int(summary["cnt"] or 0)
             max_id = int(summary["max_id"] or self._alert_last_id)
+            self._alert_last_id = max(self._alert_last_id, max_id)
+            if not self._db.get_bool("popup_notifications_enabled", True):
+                return
             row = (
                 self._db.get_conn()
                 .execute(
@@ -630,7 +633,6 @@ class MainWindow(QMainWindow):
                 )
                 .fetchone()
             )
-            self._alert_last_id = max(self._alert_last_id, max_id)
             if not row:
                 return
             cam_id, ts, rules = row
