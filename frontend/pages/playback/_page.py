@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import os
@@ -21,7 +21,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QListView,
     QListWidgetItem,
     QPushButton,
     QSlider,
@@ -53,7 +52,6 @@ from frontend.styles._colors import (
     _BG_OVERLAY,
     _BG_SURFACE,
     _BLACK,
-    _BORDER_DARK,
     _BORDER_DIM,
     _TEXT_MUTED,
     _TEXT_PRI,
@@ -82,7 +80,6 @@ from frontend.ui_tokens import (
     FONT_SIZE_LABEL,
     FONT_SIZE_MICRO,
     FONT_WEIGHT_BOLD,
-    RADIUS_11,
     RADIUS_6,
     RADIUS_LG,
     RADIUS_MD,
@@ -738,7 +735,7 @@ QSlider::handle:horizontal {{
         if self._snapshots_list:
             removed_row = -1
             removed_pair = None
-            for idx, (item, card) in enumerate(self._snapshot_cards):
+            for item, card in self._snapshot_cards:
                 item_path = item.data(Qt.ItemDataRole.UserRole)
                 if item_path == path:
                     removed_row = self._snapshots_list.row(item)

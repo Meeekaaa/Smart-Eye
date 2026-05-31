@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import contextlib
 import re
@@ -42,7 +42,6 @@ from frontend.ui_tokens import (
     SPACE_MD,
     SPACE_SM,
     SPACE_XS,
-    SPACE_XXS,
     SPACE_XXXS,
 )
 

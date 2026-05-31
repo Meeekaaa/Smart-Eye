@@ -22,7 +22,6 @@ from frontend.ui_tokens import (
     SPACE_3,
 )
 from frontend.styles._colors import (
-    _TEXT_MUTED,
     _TEXT_PRI,
     _TEXT_SEC,
 )

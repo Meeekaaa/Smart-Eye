@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import contextlib
 import logging
@@ -31,7 +31,7 @@ from ._ui_builder import build_page_ui
 from ._widgets import RosterRowWidget
 from frontend.styles._btn_styles import _SECONDARY_BTN
 from frontend.styles._colors import _ACCENT_BG_22, _ACCENT_HI, _DANGER, _MUTED_BG_25, _SUCCESS
-from frontend.styles.page_styles import divider_style, muted_label_style, section_kicker_style, text_style, transparent_surface_style
+from frontend.styles.page_styles import divider_style, muted_label_style, text_style
 from frontend.ui_tokens import (
     FONT_SIZE_15,
     FONT_SIZE_9,
@@ -446,7 +446,6 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
             _BORDER_DIM,
             _TEXT_PRI,
             _TEXT_SEC,
-            _TEXT_MUTED,
         )
 
         dlg = QDialog(self)
@@ -619,7 +618,6 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
             _BORDER_DIM,
             _TEXT_PRI,
             _TEXT_SEC,
-            _TEXT_MUTED,
             _ACCENT,
             _STYLESHEET,
         )

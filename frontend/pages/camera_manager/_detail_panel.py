@@ -52,13 +52,12 @@ from frontend.styles._colors import (
     _TEXT_SEC,
 )
 from frontend.styles._banner_styles import make_edit_banner
-from frontend.styles.page_styles import divider_style, muted_label_style, section_kicker_style, text_style, transparent_surface_style
+from frontend.styles.page_styles import divider_style, muted_label_style, section_kicker_style, text_style
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_9,
     FONT_SIZE_CAPTION,
     FONT_SIZE_LABEL,
-    FONT_SIZE_MICRO,
     FONT_SIZE_SUBHEAD,
     FONT_WEIGHT_BOLD,
     RADIUS_5,
@@ -76,18 +75,15 @@ from frontend.ui_tokens import (
     SPACE_XXXS,
     SIZE_BADGE_H,
     SIZE_BTN_W_80,
-    SIZE_BTN_W_84,
     SIZE_BTN_W_LG,
     SIZE_BTN_W_MD,
     SIZE_BTN_W_SM,
-    SIZE_CONTROL_24,
     SIZE_CONTROL_18,
     SIZE_CONTROL_30,
     SIZE_CONTROL_MD,
     SIZE_DIALOG_H_LG,
     SIZE_DIALOG_H_XL,
     SIZE_DIALOG_W_LG,
-    SIZE_FIELD_W_XS,
     SIZE_ITEM_SM,
     SIZE_LABEL_MIN,
     SIZE_LABEL_W,

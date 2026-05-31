@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from pathlib import Path
@@ -183,7 +183,7 @@ class GeneralTab(QWidget):
         row.setContentsMargins(SPACE_20, SPACE_MD, SPACE_20, SPACE_MD)
         row.setSpacing(SPACE_10)
 
-        reset_btn = QPushButton("Reset to Defaults")
+        reset_btn = QPushButton("Reset General Defaults")
         reset_btn.setStyleSheet(_DANGER_BTN)
         reset_btn.setFixedWidth(SIZE_BTN_W_160)
         reset_btn.clicked.connect(self._reset_general)
@@ -284,32 +284,31 @@ class GeneralTab(QWidget):
         ok = QMessageBox.question(
             self,
             "Reset settings",
-            "Reset all settings to defaults? This cannot be undone.",
+            "Reset General tab settings to defaults? This cannot be undone.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if ok != QMessageBox.StandardButton.Yes:
             return
-        defaults = {
-            "theme": {"value": "dark", "type": "string"},
-            "theme_json_path": {"value": "", "type": "string"},
-            "gpu_enabled": {"value": "1", "type": "bool"},
-            "onnx_provider_preference": {"value": "auto", "type": "string"},
-            "face_onnx_provider_preference": {"value": "auto", "type": "string"},
-            "plugin_onnx_provider_preference": {"value": "auto", "type": "string"},
-            "max_cameras": {"value": "4", "type": "int"},
-            "snapshot_on_alarm": {"value": "1", "type": "bool"},
-            "face_similarity_threshold": {"value": "0.45", "type": "float"},
-            "liveness_enabled": {"value": "0", "type": "bool"},
-            "log_retention_days": {"value": "90", "type": "int"},
-            "auto_start_cameras": {"value": "0", "type": "bool"},
-            "minimize_to_tray": {"value": "0", "type": "bool"},
-            "popup_notifications_enabled": {"value": "1", "type": "bool"},
-            "insightface_model_name": {"value": "buffalo_l", "type": "string"},
-        }
+        defaults = db.get_setting_defaults(
+            [
+                "theme",
+                "theme_json_path",
+                "log_retention_days",
+                "auto_start_cameras",
+                "minimize_to_tray",
+                "popup_notifications_enabled",
+                "debug_mode_enabled",
+                "experimental_mode_enabled",
+            ]
+        )
         try:
             db.import_settings_json(defaults)
             self.load()
-            QMessageBox.information(self, "Reset", "Settings restored to defaults.")
+            self.settings_saved.emit()
+            self.debug_mode_changed.emit(False)
+            self.experimental_mode_changed.emit(False)
+            self.theme_changed.emit("dark")
+            QMessageBox.information(self, "Reset", "General settings restored to defaults.")
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
             logger.exception("Failed to reset settings")
             QMessageBox.critical(self, "Error", f"Failed to reset settings:\n{exc}")

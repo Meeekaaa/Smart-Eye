@@ -9,7 +9,7 @@ from frontend.app_theme import page_base_styles
 
 
 from frontend.styles._colors import (
-    _BG_BASE,
+    _BG_BASE as _BG_BASE,
     _BG_SURFACE,
     _BG_RAISED,
     _BG_OVERLAY,
@@ -55,11 +55,11 @@ from frontend.ui_tokens import (
 )
 from frontend.styles._input_styles import _FORM_INPUTS, _FORM_COMBO
 from frontend.styles._btn_styles import (
-    _PRIMARY_BTN,
-    _TEXT_BTN_BLUE,
-    _TEXT_BTN_GHOST,
-    _TEXT_BTN_RED,
-    _TEXT_BTN_RED_CONFIRM,
+    _PRIMARY_BTN as _PRIMARY_BTN,
+    _TEXT_BTN_BLUE as _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST as _TEXT_BTN_GHOST,
+    _TEXT_BTN_RED as _TEXT_BTN_RED,
+    _TEXT_BTN_RED_CONFIRM as _TEXT_BTN_RED_CONFIRM,
 )
 from frontend.styles._form_rows import make_labeled_row, make_pill, make_section_divider, make_separator
 from frontend.styles.page_styles import section_kicker_style

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 
@@ -41,14 +41,12 @@ from frontend.widgets.action_feedback import (
 
 from frontend.styles._input_styles import _FORM_INPUT_TITLE
 from frontend.styles._colors import (
-    _ACCENT,
     _ACCENT_BG_08,
     _ACCENT_BG_12,
     _ACCENT_HI,
     _ACCENT_HI_BG_18,
     _BG_RAISED,
     _BG_SURFACE,
-    _BORDER,
     _BORDER_DIM,
     _TEXT_MUTED,
     _TEXT_PRI,
@@ -70,8 +68,6 @@ from frontend.ui_tokens import (
     SIZE_BTN_W_80,
     SIZE_CONTROL_32,
     SIZE_CONTROL_MD,
-    SIZE_CONTROL_SM,
-    SIZE_ITEM_SM,
     SIZE_LABEL_W,
     SIZE_ROW_LG,
     SIZE_ROW_72,
@@ -88,7 +84,6 @@ from frontend.ui_tokens import (
     SPACE_XXXS,
 )
 from ._constants import (
-    _PRIMARY_BTN,
     _TEXT_BTN_BLUE,
     _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,

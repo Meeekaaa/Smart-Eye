@@ -1,4 +1,4 @@
-﻿import contextlib
+import contextlib
 import importlib
 import sys
 import logging
@@ -27,7 +27,7 @@ from frontend.styles._colors import _BG_NAV_DARK
 from frontend.ui_tokens import SPACE_XXXS
 
 from frontend.services.rules_service import RulesService
-from frontend.state.page_factory import build_pages, create_page, get_page_specs, UnloadPolicy
+from frontend.state.page_factory import build_pages, get_page_specs, UnloadPolicy
 from backend.services.service_manager import get_service_manager
 from frontend.widgets.alert_popup import show_alert
 from frontend.navigation import nav_label_map
@@ -759,7 +759,7 @@ class MainWindow(QMainWindow):
                 self._tray_icon.hide()
 
 
-        for key, page in list(self._pages.items()):
+        for page in list(self._pages.values()):
             if page is None:
                 continue
             with contextlib.suppress(Exception):

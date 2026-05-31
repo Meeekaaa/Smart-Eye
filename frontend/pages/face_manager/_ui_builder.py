@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from PySide6.QtCore import Qt, QSettings
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLayout,

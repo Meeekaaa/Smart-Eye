@@ -1,4 +1,4 @@
-﻿import contextlib
+import contextlib
 import logging
 import time
 import warnings
@@ -55,12 +55,9 @@ from frontend.ui_tokens import (
     FONT_SIZE_CAPTION,
     FONT_SIZE_LABEL,
     FONT_SIZE_LARGE,
-    FONT_SIZE_XXL,
     FONT_WEIGHT_BOLD,
     FONT_WEIGHT_SEMIBOLD,
-    RADIUS_LG,
     RADIUS_MD,
-    RADIUS_XL,
     SIZE_BTN_W_135,
     SIZE_CONTROL_18,
     SIZE_CONTROL_MD,
@@ -69,7 +66,6 @@ from frontend.ui_tokens import (
     SIZE_ICON_LG,
     SIZE_PANEL_MIN,
     SPACE_10,
-    SPACE_14,
     SPACE_20,
     SPACE_5,
     SPACE_6,

@@ -24,7 +24,7 @@ https://www.qt.io/
 
 --------------------------------------------------
 
-OpenCV (opencv-python, opencv-python-headless)
+OpenCV (opencv-python)
 License: Apache License 2.0
 https://opencv.org/
 

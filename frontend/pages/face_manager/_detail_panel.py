@@ -211,7 +211,7 @@ class DetailPanel(QWidget):
     def _set_edit_mode(self, enabled: bool):
         self._edit_mode = enabled
         self._active_section = None
-        for k, hint in self._section_hint_labels.items():
+        for hint in self._section_hint_labels.values():
             hint.setVisible(enabled)
         for key, edit in self._inputs.items():
             edit.setEnabled(enabled)

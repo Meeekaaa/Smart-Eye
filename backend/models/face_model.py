@@ -221,7 +221,7 @@ def _detect_providers() -> list[str]:
 
     # Face model must run on a single concrete backend (GPU or CPU), not a hybrid chain.
     if not providers:
-        providers = ["CPUExecutionProvider"] if "CPUExecutionProvider" in avail or not avail else ["CPUExecutionProvider"]
+        providers = ["CPUExecutionProvider"]
     _cached_providers = providers
     _logger.info("Cached providers=%s | available=%s", _cached_providers, avail)
     return _cached_providers
@@ -394,6 +394,7 @@ class FaceModel:
         global _cached_model_name, _cached_providers
         with self._load_lock:
             _cached_model_name = None
+            _cached_providers = None
             self._loaded = False
             self._loading = False
             self._known_cache_dirty = True

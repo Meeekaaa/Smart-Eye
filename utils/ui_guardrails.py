@@ -21,13 +21,11 @@ HOTSPOTS = (
     FRONTEND / "widgets" / "face_capture_widget.py",
     FRONTEND / "widgets" / "auth_login_card.py",
     FRONTEND / "widgets" / "auth_reset_card.py",
-    FRONTEND / "widgets" / "model_card_widget.py",
     FRONTEND / "widgets" / "stat_card_widget.py",
     FRONTEND / "widgets" / "performance_widget.py",
     FRONTEND / "widgets" / "chart_widget.py",
     FRONTEND / "widgets" / "heatmap_widget.py",
     FRONTEND / "widgets" / "multi_feed_widget.py",
-    FRONTEND / "widgets" / "rule_builder_widget.py",
     FRONTEND / "widgets" / "toast.py",
     FRONTEND / "widgets" / "auth_overlay.py",
     FRONTEND / "widgets" / "video_widget.py",
@@ -92,7 +90,6 @@ def main() -> int:
         print("\nHotspot inline style samples:")
         for path, line_no, snippet in inline_hotspot[:20]:
             print(f"  - {path.relative_to(ROOT)}:{line_no}: {snippet}")
-
 
     if missing_theme or input_underlines:
         return 1

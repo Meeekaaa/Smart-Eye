@@ -1,8 +1,8 @@
-﻿import logging
-from datetime import date, datetime, timezone
+import logging
+from datetime import datetime, timezone
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QFont, QPixmap, QTextCharFormat, QColor
+from PySide6.QtGui import QFont, QTextCharFormat, QColor
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,

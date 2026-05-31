@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 
@@ -93,7 +93,7 @@ class PerformanceTab(QWidget):
             _srow(
                 "Face provider",
                 self._face_provider,
-                hint="Choose provider profile for face recognition. Preset also applies tuned defaults.",
+                hint="Choose provider profile for face recognition. Changing the profile applies tuned defaults.",
             )
         )
 
@@ -106,7 +106,7 @@ class PerformanceTab(QWidget):
             _srow(
                 "Plugins provider",
                 self._plugin_provider,
-                hint="Choose provider profile for loaded ONNX plugins. Preset also applies tuned defaults.",
+                hint="Choose provider profile for loaded ONNX plugins. Changing the profile applies tuned defaults.",
             )
         )
 
@@ -254,8 +254,14 @@ class PerformanceTab(QWidget):
     def _save(self) -> None:
         face_pref = str(self._face_provider.currentData() or "auto")
         plugin_pref = str(self._plugin_provider.currentData() or "auto")
+        gpu_enabled = bool(self._gpu_toggle.isChecked())
+        old_gpu_enabled = db.get_bool("gpu_enabled", False)
+        old_face_pref = str(db.get_setting("face_onnx_provider_preference", "auto") or "auto")
+        old_plugin_pref = str(db.get_setting("plugin_onnx_provider_preference", "auto") or "auto")
+        face_provider_changed = old_face_pref != face_pref or old_gpu_enabled != gpu_enabled
+        plugin_provider_changed = old_plugin_pref != plugin_pref or old_gpu_enabled != gpu_enabled
 
-        unsupported = self._get_unsupported_provider_prefs(face_pref, plugin_pref)
+        unsupported = self._get_unsupported_provider_prefs(face_pref, plugin_pref) if gpu_enabled else []
         if unsupported:
             supported = ", ".join(self._get_supported_provider_prefs())
             details = "\n".join(f"- {item}" for item in unsupported)
@@ -268,7 +274,7 @@ class PerformanceTab(QWidget):
             )
             return
 
-        db.set_setting("gpu_enabled", "1" if self._gpu_toggle.isChecked() else "0")
+        db.set_setting("gpu_enabled", "1" if gpu_enabled else "0")
         # Always persist user-selected provider preferences, even if unsupported on this machine.
         # This allows copying config to another machine/GPU without losing intent.
         db.set_setting("face_onnx_provider_preference", face_pref)
@@ -288,7 +294,16 @@ class PerformanceTab(QWidget):
         db.set_setting("auto_pause_live_when_idle", 1 if self._auto_pause_live.isChecked() else 0)
         self.tab_transitions_changed.emit(tab_transitions_enabled)
 
-        self._apply_provider_tuning(face_pref, plugin_pref)
+        if face_provider_changed or plugin_provider_changed:
+            tuning_face_pref = face_pref if gpu_enabled else "cpu"
+            tuning_plugin_pref = plugin_pref if gpu_enabled else "cpu"
+            self._apply_provider_tuning(
+                tuning_face_pref,
+                tuning_plugin_pref,
+                apply_face=face_provider_changed,
+                apply_plugins=plugin_provider_changed,
+            )
+            self.load()
 
         try:
             from utils.resource_limiter import apply_limits
@@ -302,11 +317,24 @@ class PerformanceTab(QWidget):
             logger.exception("Failed to apply resource limits after save")
 
         try:
-            from backend.models import model_loader
             from utils import config as _cfg
 
             _cfg.invalidate_cache()
-            model_loader.load_face_model_async()
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            logger.exception("Failed to invalidate config cache after performance settings save")
+
+        try:
+            from backend.models import model_loader
+
+            if face_provider_changed:
+                model_loader.reload_face_model()
+            else:
+                model_loader.load_face_model_async()
+                model_loader.load_face_model()
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            logger.exception("Failed to reload face model after performance settings save")
+
+        try:
             notify_plugins_changed = None
             try:
                 from backend.pipeline.detector_manager import notify_plugins_changed as _npc
@@ -315,10 +343,9 @@ class PerformanceTab(QWidget):
             except Exception:
                 notify_plugins_changed = None
             if notify_plugins_changed:
-                notify_plugins_changed()
-            model_loader.load_face_model()
+                notify_plugins_changed(reload_plugin_sessions=plugin_provider_changed)
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-            logger.exception("Failed to reload face model after performance settings save")
+            logger.exception("Failed to reload plugin models after performance settings save")
         if db.get_bool("ui_show_save_popups", False):
             QMessageBox.information(self, "Saved", "Performance settings saved.")
         else:
@@ -404,38 +431,41 @@ class PerformanceTab(QWidget):
             issues.append(f"Plugins provider: {plugin_pref}")
         return issues
 
-    def _apply_provider_tuning(self, face_pref: str, plugin_pref: str) -> None:
+    def _apply_provider_tuning(self, face_pref: str, plugin_pref: str, *, apply_face: bool = True, apply_plugins: bool = True) -> None:
         # Plugin profile drives frame/inference pacing defaults.
-        if plugin_pref == "cuda":
-            db.set_setting("detection_interval", "1")
-            db.set_setting("live_infer_dim", "768")
-            db.set_setting("live_infer_dim_min", "448")
-            db.set_setting("live_infer_dim_max", "896")
-            db.set_setting("detector_max_infer_dim", "896")
-            db.set_setting("playback_infer_target_fps", "16")
-        elif plugin_pref == "dml":
-            db.set_setting("detection_interval", "1")
-            db.set_setting("live_infer_dim", "640")
-            db.set_setting("live_infer_dim_min", "384")
-            db.set_setting("live_infer_dim_max", "768")
-            db.set_setting("detector_max_infer_dim", "768")
-            db.set_setting("playback_infer_target_fps", "12")
-        elif plugin_pref == "rocm":
-            db.set_setting("detection_interval", "1")
-            db.set_setting("live_infer_dim", "768")
-            db.set_setting("live_infer_dim_min", "448")
-            db.set_setting("live_infer_dim_max", "896")
-            db.set_setting("detector_max_infer_dim", "896")
-            db.set_setting("playback_infer_target_fps", "14")
-        elif plugin_pref == "cpu":
-            db.set_setting("detection_interval", "2")
-            db.set_setting("live_infer_dim", "448")
-            db.set_setting("live_infer_dim_min", "320")
-            db.set_setting("live_infer_dim_max", "640")
-            db.set_setting("detector_max_infer_dim", "640")
-            db.set_setting("playback_infer_target_fps", "8")
+        if apply_plugins:
+            if plugin_pref == "cuda":
+                db.set_setting("detection_interval", "1")
+                db.set_setting("live_infer_dim", "768")
+                db.set_setting("live_infer_dim_min", "448")
+                db.set_setting("live_infer_dim_max", "896")
+                db.set_setting("detector_max_infer_dim", "896")
+                db.set_setting("playback_infer_target_fps", "16")
+            elif plugin_pref == "dml":
+                db.set_setting("detection_interval", "1")
+                db.set_setting("live_infer_dim", "640")
+                db.set_setting("live_infer_dim_min", "384")
+                db.set_setting("live_infer_dim_max", "768")
+                db.set_setting("detector_max_infer_dim", "768")
+                db.set_setting("playback_infer_target_fps", "12")
+            elif plugin_pref == "rocm":
+                db.set_setting("detection_interval", "1")
+                db.set_setting("live_infer_dim", "768")
+                db.set_setting("live_infer_dim_min", "448")
+                db.set_setting("live_infer_dim_max", "896")
+                db.set_setting("detector_max_infer_dim", "896")
+                db.set_setting("playback_infer_target_fps", "14")
+            elif plugin_pref == "cpu":
+                db.set_setting("detection_interval", "2")
+                db.set_setting("live_infer_dim", "448")
+                db.set_setting("live_infer_dim_min", "320")
+                db.set_setting("live_infer_dim_max", "640")
+                db.set_setting("detector_max_infer_dim", "640")
+                db.set_setting("playback_infer_target_fps", "8")
 
         # Face profile drives face-ID throughput defaults.
+        if not apply_face:
+            return
         face_profile = face_pref
         if face_profile == "auto":
             supported = self._get_supported_provider_prefs()

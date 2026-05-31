@@ -29,17 +29,12 @@ from frontend.styles._banner_styles import make_edit_banner
 from ._widgets import build_rule_header
 from frontend.styles._input_styles import _FORM_INPUT_TITLE, _FORM_INPUTS
 from frontend.ui_tokens import (
-    FONT_SIZE_7,
     FONT_SIZE_CAPTION,
     FONT_SIZE_LABEL,
-    FONT_SIZE_MICRO,
-    FONT_WEIGHT_BOLD,
     FONT_WEIGHT_NORMAL,
     RADIUS_3,
-    RADIUS_5,
     SIZE_BTN_W_80,
     SIZE_BTN_W_MD,
-    SIZE_BTN_W_SM,
     SIZE_CONTROL_MD,
     SIZE_LABEL_W,
     SIZE_PANEL_MD,
@@ -64,7 +59,6 @@ from ._constants import (
     _BG_SURFACE,
     _BORDER,
     _BORDER_DIM,
-    _PRIMARY_BTN,
     _TEXT_PRI,
     _TEXT_BTN_BLUE,
     _TEXT_BTN_GHOST,

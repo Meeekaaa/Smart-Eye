@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import datetime
 import json
@@ -210,6 +210,26 @@ def _evaluate_rules_for_payload(camera_id: int, payload: dict) -> tuple[list[str
     return names, _alarm_level_from_rules(names)
 
 
+def _build_detection_log_row(ts: datetime.datetime, camera_id: int, camera_name: str) -> dict:
+    if random.random() < 0.22:
+        identity = None
+        gender = "unknown"
+    else:
+        identity, gender = random.choice(_DUMMY_IDENTITIES)
+    payload, face_confidence = _build_dummy_detection_payload(camera_name, identity, gender)
+    rules_triggered, alarm_level = _evaluate_rules_for_payload(camera_id, payload)
+    return {
+        "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+        "camera_id": camera_id,
+        "identity": identity or "Unknown",
+        "face_confidence": face_confidence,
+        "detections": payload,
+        "rules_triggered": rules_triggered,
+        "alarm_level": alarm_level,
+        "snapshot_path": f"data/snapshots/debug_cam{camera_id}_{random.randint(100_000, 999_999)}.jpg",
+    }
+
+
 class _FloodWorker(QThread):
     progress = Signal(int)
     finished = Signal(int, int)
@@ -227,24 +247,12 @@ class _FloodWorker(QThread):
         self._cancelled = True
 
     def run(self) -> None:
-        import sqlite3 as _sq
-
         try:
-            conn = _sq.connect(self._db_path, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-
             now = datetime.datetime.now()
-            cameras = self._cam_rows or [{"id": 0, "name": "Debug Dummy Camera"}]
-            self._debug_service.ensure_debug_rules(conn, cameras)
-            self._debug_service.ensure_debug_faces(conn, count=len(_DUMMY_IDENTITIES))
-            self._debug_service.ensure_debug_notification_profiles(conn)
-
-            DET_SQL = (
-                "INSERT INTO detection_logs"
-                " (timestamp, camera_id, identity, face_confidence,"
-                "  detections, rules_triggered, alarm_level, snapshot_path)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            cameras = self._debug_service.prepare_seed_support(
+                camera_count=2,
+                camera_rows=self._cam_rows,
+                face_count=len(_DUMMY_IDENTITIES),
             )
 
             def _det():
@@ -253,24 +261,7 @@ class _FloodWorker(QThread):
                 cam = random.choice(cameras)
                 camera_id = int(cam.get("id", 0) or 0)
                 camera_name = str(cam.get("name") or f"Camera {camera_id}")
-                if random.random() < 0.22:
-                    identity = None
-                    gender = "unknown"
-                else:
-                    identity, gender = random.choice(_DUMMY_IDENTITIES)
-                payload, face_confidence = _build_dummy_detection_payload(camera_name, identity, gender)
-                rules_triggered, alarm_level = _evaluate_rules_for_payload(camera_id, payload)
-                identity_text = identity or "Unknown"
-                return (
-                    ts.strftime("%Y-%m-%d %H:%M:%S"),
-                    camera_id,
-                    identity_text,
-                    face_confidence,
-                    json.dumps(payload),
-                    json.dumps(rules_triggered),
-                    alarm_level,
-                    f"data/snapshots/debug_cam{camera_id}_{random.randint(100_000, 999_999)}.jpg",
-                )
+                return _build_detection_log_row(ts, camera_id, camera_name)
 
             start = os.path.getsize(self._db_path)
             needed = max(0, self._target - start)
@@ -278,9 +269,7 @@ class _FloodWorker(QThread):
             BATCH = 500
 
             while not self._cancelled:
-                conn.executemany(DET_SQL, [_det() for _ in range(BATCH)])
-                conn.commit()
-                total += BATCH
+                total += db.seed_detection_logs([_det() for _ in range(BATCH)], ignore_size_limit=True)
 
                 current = os.path.getsize(self._db_path)
                 gained = current - start
@@ -292,7 +281,6 @@ class _FloodWorker(QThread):
                 if total >= 20_000_000:
                     break
 
-            conn.close()
             self.finished.emit(total, os.path.getsize(self._db_path))
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
             self.error.emit(str(exc))
@@ -302,33 +290,15 @@ class _SeedWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(bool, str)
 
-    def __init__(self, db_path: str, count: int, debug_service: DebugService, parent=None) -> None:
+    def __init__(self, count: int, debug_service: DebugService, parent=None) -> None:
         super().__init__(parent)
-        self._db_path = db_path
         self._count = count
         self._debug_service = debug_service
 
     def run(self) -> None:
-        import sqlite3 as _sq
-
         try:
-            conn = _sq.connect(self._db_path, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-
-            created_cameras = self._debug_service.create_dummy_cameras(conn, count=3)
-            cam_rows = created_cameras or self._debug_service.get_camera_info(conn)
-            self._debug_service.ensure_debug_rules(conn, cam_rows)
-            self._debug_service.ensure_debug_faces(conn, count=len(_DUMMY_IDENTITIES))
-            self._debug_service.ensure_debug_notification_profiles(conn)
+            cam_rows = self._debug_service.prepare_seed_support(camera_count=3, face_count=len(_DUMMY_IDENTITIES))
             now = datetime.datetime.now()
-
-            DET_SQL = (
-                "INSERT INTO detection_logs"
-                " (timestamp, camera_id, identity, face_confidence,"
-                "  detections, rules_triggered, alarm_level, snapshot_path)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            )
 
             BATCH = 1000
             rows = []
@@ -338,40 +308,19 @@ class _SeedWorker(QThread):
                 cam = random.choice(cam_rows)
                 camera_id = int(cam.get("id", 0) or 0)
                 camera_name = str(cam.get("name") or f"Camera {camera_id}")
-                if random.random() < 0.22:
-                    identity = None
-                    gender = "unknown"
-                else:
-                    identity, gender = random.choice(_DUMMY_IDENTITIES)
-                payload, face_confidence = _build_dummy_detection_payload(camera_name, identity, gender)
-                rules_triggered, alarm_level = _evaluate_rules_for_payload(camera_id, payload)
-                rows.append(
-                    (
-                        ts.strftime("%Y-%m-%d %H:%M:%S"),
-                        camera_id,
-                        identity or "Unknown",
-                        face_confidence,
-                        json.dumps(payload),
-                        json.dumps(rules_triggered),
-                        alarm_level,
-                        f"data/snapshots/debug_cam{camera_id}_{random.randint(100_000, 999_999)}.jpg",
-                    )
-                )
+                rows.append(_build_detection_log_row(ts, camera_id, camera_name))
                 if len(rows) >= BATCH:
-                    conn.executemany(DET_SQL, rows)
-                    conn.commit()
+                    db.seed_detection_logs(rows, ignore_size_limit=True)
                     rows.clear()
                     pct = int(min(99, (i + 1) * 100 / max(self._count, 1)))
                     self.progress.emit(pct, f"Inserted {i + 1:,} / {self._count:,} records")
 
             if rows:
-                conn.executemany(DET_SQL, rows)
-                conn.commit()
+                db.seed_detection_logs(rows, ignore_size_limit=True)
 
-            conn.close()
             self.finished.emit(
                 True,
-                f"Inserted {self._count:,} detection log records across {max(1, len(created_cameras))} new dummy cameras.",
+                f"Inserted {self._count:,} detection log records across {max(1, len(cam_rows))} dummy cameras.",
             )
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
             self.finished.emit(False, str(exc))
@@ -862,7 +811,7 @@ class DebugTab(QWidget):
         self._seed_count.setEnabled(False)
         self._seed_type_rec.setEnabled(False)
 
-        self._seed_worker = _SeedWorker(self._debug_service.get_db_path(), count, self._debug_service, self)
+        self._seed_worker = _SeedWorker(count, self._debug_service, self)
 
         def _on_progress(pct: int, msg: str) -> None:
             self._seed_progress.setValue(pct)
@@ -905,8 +854,7 @@ class DebugTab(QWidget):
             return
 
         try:
-            created_cameras = self._debug_service.create_dummy_cameras(db.get_conn(), count=3)
-            cam_rows = created_cameras or self._debug_service.get_camera_info(db.get_conn())
+            cam_rows = self._debug_service.prepare_seed_support(camera_count=3, face_count=len(_DUMMY_IDENTITIES))
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
             QMessageBox.warning(self, "Error", str(exc))
             return

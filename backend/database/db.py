@@ -142,6 +142,17 @@ _SEC_QUESTIONS_DEFAULT = (
     "What city were you born in?",
     "What is your pet name?",
 )
+_SETTING_DEFAULTS = {
+    "theme": {"value": "dark", "type": "string", "label": "UI Theme", "section": "appearance"},
+    "theme_json_path": {"value": "", "type": "string", "label": "Theme JSON Path", "section": "general"},
+    "log_retention_days": {"value": "90", "type": "int", "label": "Log Retention (days)", "section": "data"},
+    "auto_start_cameras": {"value": "0", "type": "bool", "label": "Auto-start cameras on launch", "section": "general"},
+    "minimize_to_tray": {"value": "0", "type": "bool", "label": "Minimize to tray", "section": "general"},
+    "popup_notifications_enabled": {"value": "1", "type": "bool", "label": "Popup notifications", "section": "notifications"},
+    "debug_mode_enabled": {"value": "0", "type": "bool", "label": "Debugging mode", "section": "general"},
+    "experimental_mode_enabled": {"value": "0", "type": "bool", "label": "Experimental settings", "section": "general"},
+    "liveness_check_global": {"value": "0", "type": "bool", "label": "Require Liveness Globally", "section": "detection"},
+}
 
 
 def init(db_path):
@@ -173,7 +184,7 @@ def init(db_path):
     try:
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         if "cameras" not in tables:
-            logging.getLogger(__name__).warning("Essential table 'cameras' missing — attempting to reapply schema.sql")
+            logging.getLogger(__name__).warning("Essential table 'cameras' missing - attempting to reapply schema.sql")
             try:
                 with open(schema_path) as f:
                     conn.executescript(f.read())
@@ -189,21 +200,28 @@ def get_conn():
 
 
 def close():
+    global _writer_thread, _writer_thread_id, _writer_conn
     _writer_stop.set()
     wait_for_writer_idle(timeout_sec=5.0)
     conn = getattr(_conn_local, "conn", None)
     if conn:
         conn.close()
         _conn_local.conn = None
+    writer = _writer_thread
+    if writer and writer.is_alive():
+        try:
+            _write_queue.put(None, timeout=2.0)
+        except Exception:
+            pass
     try:
-        _write_queue.put(None, timeout=2.0)
+        if writer and writer.is_alive():
+            writer.join(timeout=2.0)
     except Exception:
         pass
-    try:
-        if _writer_thread and _writer_thread.is_alive():
-            _writer_thread.join(timeout=2.0)
-    except Exception:
-        pass
+    if writer is _writer_thread and (writer is None or not writer.is_alive()):
+        _writer_thread = None
+        _writer_thread_id = None
+        _writer_conn = None
 
 
 def _normalize_email(email: str) -> str:
@@ -308,6 +326,23 @@ def _write_call(fn):
     if err:
         raise err
     return res
+
+
+def write_transaction(fn):
+    def _op(conn):
+        result = fn(conn)
+        conn.commit()
+        return result
+
+    return _write_call(_op)
+
+
+def get_setting_defaults(keys=None):
+    if keys is None:
+        selected = _SETTING_DEFAULTS
+    else:
+        selected = {key: _SETTING_DEFAULTS[key] for key in keys if key in _SETTING_DEFAULTS}
+    return {key: dict(value) for key, value in selected.items()}
 
 
 def _hash_password(password: str, salt: str | None = None):
@@ -804,25 +839,28 @@ def get_plugin_cameras(plugin_id):
 
 
 def assign_camera_plugin_class(camera_id, plugin_class_id, enabled=1, confidence=None):
+    enabled_value = 1 if enabled in (1, True, "1", "true") else 0
 
-    try:
-        _conn.execute(
-            "INSERT INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(camera_id, plugin_class_id) DO UPDATE SET enabled=excluded.enabled, confidence=excluded.confidence",
-            (camera_id, plugin_class_id, 1 if enabled in (1, True, "1", "true") else 0, confidence),
-        )
-        _conn.commit()
-    except Exception:
-        cur = _conn.execute(
-            "UPDATE camera_plugin_classes SET enabled=?, confidence=? WHERE camera_id=? AND plugin_class_id=?",
-            (1 if enabled in (1, True, "1", "true") else 0, confidence, camera_id, plugin_class_id),
-        )
-        if cur.rowcount == 0:
-            _conn.execute(
-                "INSERT OR IGNORE INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?)",
-                (camera_id, plugin_class_id, 1 if enabled in (1, True, "1", "true") else 0, confidence),
+    def _op(conn):
+        try:
+            conn.execute(
+                "INSERT INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(camera_id, plugin_class_id) DO UPDATE SET enabled=excluded.enabled, confidence=excluded.confidence",
+                (camera_id, plugin_class_id, enabled_value, confidence),
             )
-            _conn.commit()
+        except Exception:
+            cur = conn.execute(
+                "UPDATE camera_plugin_classes SET enabled=?, confidence=? WHERE camera_id=? AND plugin_class_id=?",
+                (enabled_value, confidence, camera_id, plugin_class_id),
+            )
+            if cur.rowcount == 0:
+                conn.execute(
+                    "INSERT OR IGNORE INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?)",
+                    (camera_id, plugin_class_id, enabled_value, confidence),
+                )
+        conn.commit()
+
+    _write_call(_op)
 
 
 def get_camera_plugin_classes(camera_id, plugin_id):
@@ -1187,6 +1225,43 @@ def _normalize_detections_payload(payload):
     return data
 
 
+def _serialize_rules_triggered(rules_triggered):
+    if rules_triggered is None:
+        return None
+    if isinstance(rules_triggered, str):
+        return rules_triggered
+    return json.dumps(_json_safe_value(rules_triggered))
+
+
+def _has_identity_value(identity: str) -> int:
+    ident_text = (identity or "").strip().lower()
+    return 1 if ident_text and ident_text != "unknown" else 0
+
+
+def _prepare_detection_log_values(record: dict, *, include_timestamp: bool = False):
+    det_norm = _normalize_detections_payload(record.get("detections"))
+    identity = _identity_to_text(record.get("identity"))
+    if not identity:
+        identity = _identity_to_text(det_norm.get("identity"))
+    gender_norm = _normalize_gender_value(record.get("gender") or det_norm.get("gender"))
+    values = [
+        record.get("camera_id"),
+        record.get("zone_id"),
+        identity,
+        float(record.get("face_confidence") or 0.0),
+        json.dumps(det_norm),
+        gender_norm,
+        _serialize_rules_triggered(record.get("rules_triggered")),
+        int(record.get("alarm_level") or 0),
+        record.get("snapshot_path") or "",
+        int(record.get("reviewed") or 0),
+        _has_identity_value(identity),
+    ]
+    if include_timestamp:
+        values.insert(0, record.get("timestamp") or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    return tuple(values)
+
+
 def _db_size_bytes() -> int:
     if not _DB_PATH:
         return 0
@@ -1214,18 +1289,45 @@ def add_detection_log(camera_id, identity=None, face_confidence=0.0, detections=
     if is_db_size_over_limit():
         logging.getLogger(__name__).warning("Skipping detection log: database size limit reached")
         return None
-    det_norm = _normalize_detections_payload(detections) if isinstance(detections, dict) else _normalize_detections_payload(detections)
-    det_json = json.dumps(det_norm)
-    rules_json = json.dumps(rules_triggered) if isinstance(rules_triggered, list) else rules_triggered
-    gender_norm = _normalize_gender_value(det_norm.get("gender"))
-    identity = _identity_to_text(identity)
-    ident_text = identity.lower()
-    has_identity = 1 if ident_text and ident_text != "unknown" else 0
+    values = _prepare_detection_log_values(
+        {
+            "camera_id": camera_id,
+            "identity": identity,
+            "face_confidence": face_confidence,
+            "detections": detections,
+            "rules_triggered": rules_triggered,
+            "alarm_level": alarm_level,
+            "snapshot_path": snapshot_path,
+        }
+    )
     cur = _write_execute(
-        "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, has_identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (camera_id, None, identity, face_confidence, det_json, gender_norm, rules_json, alarm_level, snapshot_path, has_identity),
+        "INSERT INTO detection_logs "
+        "(camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, reviewed, has_identity) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        values,
     )
     return cur.lastrowid
+
+
+def seed_detection_logs(rows, *, ignore_size_limit: bool = False) -> int:
+    if not rows:
+        return 0
+    if not ignore_size_limit and is_db_size_over_limit():
+        logging.getLogger(__name__).warning("Skipping detection log seed: database size limit reached")
+        return 0
+    prepared = [_prepare_detection_log_values(dict(row), include_timestamp=True) for row in rows]
+
+    def _op(conn):
+        conn.executemany(
+            "INSERT INTO detection_logs "
+            "(timestamp, camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, reviewed, has_identity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            prepared,
+        )
+        conn.commit()
+        return len(prepared)
+
+    return _write_call(_op)
 
 
 def get_detection_logs(

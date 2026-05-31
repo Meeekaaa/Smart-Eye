@@ -40,7 +40,6 @@ from frontend.ui_tokens import (
     SIZE_CONTROL_MID,
     SIZE_PANEL_SM,
     SIZE_PANEL_W_MD,
-    SPACE_6,
     SPACE_MD,
     SPACE_XS,
 )

@@ -21,7 +21,6 @@ from frontend.styles._colors import (
     _TEXT_PRI,
     _TEXT_SEC,
     _TEXT_MUTED,
-    _ACCENT,
     _ACCENT_HI,
     _WARNING,
     _DANGER,
@@ -29,7 +28,6 @@ from frontend.styles._colors import (
 from frontend.ui_tokens import (
     FONT_SIZE_CAPTION,
     FONT_SIZE_LABEL,
-    FONT_WEIGHT_BOLD,
     FONT_WEIGHT_SEMIBOLD,
     RADIUS_MD,
     SPACE_6,

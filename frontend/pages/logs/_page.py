@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from PySide6.QtGui import QTextCharFormat, QColor
 
 from PySide6.QtCore import QDate, Qt, QTimer, QSettings, QSignalBlocker
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,

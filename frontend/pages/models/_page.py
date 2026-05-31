@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import contextlib
 import logging
@@ -65,7 +65,6 @@ from frontend.styles._colors import (
 from frontend.styles._input_styles import _FORM_INPUTS, _FORM_COMBO
 from frontend.styles._btn_styles import (
     _PRIMARY_BTN,
-    _SECONDARY_BTN,
     _TEXT_BTN_RED as _RED_TXT_BTN,
     _TAB_BTN as _M_TAB_BTN,
     _TAB_BTN_ACTIVE as _M_TAB_BTN_ACTIVE,
@@ -87,7 +86,6 @@ from frontend.ui_tokens import (
     FONT_SIZE_LABEL,
     FONT_SIZE_LARGE,
     FONT_SIZE_MICRO,
-    FONT_SIZE_SUBHEAD,
     FONT_WEIGHT_BOLD,
     FONT_WEIGHT_SEMIBOLD,
     RADIUS_6,
@@ -105,7 +103,6 @@ from frontend.ui_tokens import (
     SIZE_CONTROL_MD,
     SIZE_CONTROL_SM,
     SIZE_FIELD_W,
-    SIZE_FIELD_W_SM,
     SIZE_HEADER_H,
     SIZE_ITEM_SM,
     SIZE_PILL_H,
@@ -1187,7 +1184,7 @@ class ModelsPage(QWidget):
             empty.setStyleSheet(_PLUGIN_EMPTY_STYLE)
             self._plugins_vbox.addWidget(empty)
             return
-        for i, p in enumerate(plugins):
+        for p in plugins:
             row_w = QFrame()
             row_w.setStyleSheet(card_shell_style(bg=_BG_RAISED, radius=RADIUS_MD))
             row_w.setFixedHeight(SIZE_ROW_48)

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QFrame, QLabel, QPushButton
 from frontend.pages.rules_manager._constants import _DEL_DEFAULT_SS, _DEL_CONFIRM_SS
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.styles._colors import _ACCENT_HI_BG_07, _BORDER_DIM, _TEXT_PRI, _TEXT_MUTED
-from frontend.ui_tokens import FONT_SIZE_CAPTION, FONT_SIZE_MICRO, FONT_WEIGHT_BOLD, RADIUS_MD, SIZE_ROW_XL, SPACE_6
+from frontend.ui_tokens import FONT_SIZE_CAPTION, FONT_SIZE_MICRO, FONT_WEIGHT_BOLD, RADIUS_MD, SIZE_ROW_XL
 from frontend.widgets.base.roster_card_base import apply_roster_card_style, build_roster_card_layout
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 

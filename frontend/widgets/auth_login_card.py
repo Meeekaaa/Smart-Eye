@@ -21,7 +21,6 @@ from frontend.styles._colors import (
     _DANGER,
     _TEXT_PRI,
     _TEXT_SEC,
-    _TEXT_MUTED,
 )
 from frontend.styles._btn_styles import _PRIMARY_BTN, _TEXT_BTN_GHOST
 from frontend.styles._input_styles import _AUTH_INPUT_LG

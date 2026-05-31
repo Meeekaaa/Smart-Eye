@@ -6,11 +6,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from frontend.styles._btn_styles import _PRIMARY_BTN, _TEXT_BTN_BLUE, _TEXT_BTN_GHOST, _TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM
+from frontend.styles._btn_styles import (
+    _PRIMARY_BTN as _PRIMARY_BTN,
+    _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST as _TEXT_BTN_GHOST,
+    _TEXT_BTN_RED,
+    _TEXT_BTN_RED_CONFIRM,
+)
 from frontend.app_theme import page_base_styles
 
 from frontend.styles._colors import (
-    _BG_BASE,
+    _BG_BASE as _BG_BASE,
     _BG_SURFACE,
     _BG_RAISED,
     _BG_OVERLAY,
@@ -33,7 +39,7 @@ from frontend.styles._colors import (
     _WARNING_BG_14,
     _DANGER,
     _DANGER_BG_14,
-    _SUCCESS,
+    _SUCCESS as _SUCCESS,
     _DANGER_BORDER_45,
     _TEXT_ON_ACCENT,
 )

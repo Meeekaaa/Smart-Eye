@@ -89,6 +89,30 @@ def reload_face_model(model_dir: str = "", cpu_only: bool = False) -> FaceModel:
     return model
 
 
+def reload_face_model_async(model_dir: str = "", cpu_only: bool = False, callback=None) -> FaceModel:
+    global _face_model, _prewarm_thread
+    with _face_model_lock:
+        if _face_model is None:
+            _face_model = FaceModel()
+        model = _face_model
+
+    providers = ["CPUExecutionProvider"] if cpu_only else None
+
+    def _async_reload():
+        try:
+            model.reload(model_dir, providers_override=providers)
+            if callback:
+                callback(success=True, error=None)
+        except Exception as exc:
+            _logger.error("Async face model reload failed: %s", exc, exc_info=True)
+            if callback:
+                callback(success=False, error=str(exc))
+
+    _prewarm_thread = threading.Thread(target=_async_reload, daemon=True, name="FaceModelAsyncReload")
+    _prewarm_thread.start()
+    return model
+
+
 def _load_face_model_internal(model_dir: str = "", async_load: bool = False) -> FaceModel:
     global _face_model
     with _face_model_lock:
@@ -182,6 +206,30 @@ def load_plugin(plugin_row: dict) -> ONNXObjectModel:
 def unload_plugin(plugin_id: int) -> None:
     with _object_models_lock:
         _object_models.pop(plugin_id, None)
+
+
+def unload_all_plugins() -> None:
+    with _object_models_lock:
+        _object_models.clear()
+
+
+def reload_all_plugins(plugin_rows: list[dict] | None = None) -> dict[int, ONNXObjectModel]:
+    rows = plugin_rows if plugin_rows is not None else db.get_plugins(enabled_only=True)
+    loaded: dict[int, ONNXObjectModel] = {}
+
+    with _object_models_lock:
+        _object_models.clear()
+
+    for row in rows or []:
+        pid, model = _load_single_plugin(row)
+        if model is None:
+            continue
+        _sync_plugin_classes_from_model(pid, model)
+        loaded[pid] = model
+
+    with _object_models_lock:
+        _object_models.update(loaded)
+        return dict(_object_models)
 
 
 def get_provider_summary():

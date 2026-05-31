@@ -1399,8 +1399,11 @@ def get_manager():
     return _instance
 
 
-def notify_plugins_changed():
+def notify_plugins_changed(reload_plugin_sessions: bool = False):
     try:
+        if reload_plugin_sessions:
+            with contextlib.suppress(Exception):
+                model_loader.unload_all_plugins()
         m = get_manager()
         m.invalidate_camera_cache()
         m.reload()

@@ -1,10 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 import time
 
 from PySide6.QtCore import Qt, QSettings, QEvent
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,

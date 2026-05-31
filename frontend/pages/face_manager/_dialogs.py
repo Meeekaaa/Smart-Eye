@@ -231,7 +231,7 @@ def show_edit_face_dialog(parent, face_id: int) -> None:
             birth_date=birth_store,
             phone=ph_e.text().strip(),
             email=email_val,
-            authorized_cameras="[]" if ac_toggle.isChecked() else "[]",
+            authorized_cameras="[]",
         )
         dlg.accept()
 
