@@ -993,13 +993,13 @@ class DetectorManager:
         else:
             use_stable_object_bboxes = bool(stable_raw)
         try:
-            hold_frames = max(0, int(config.get("bbox_hold_max_frames", 3) or 3))
+            hold_frames = max(0, int(config.get("bbox_hold_max_frames", 6) or 6))
         except Exception:
-            hold_frames = 3
+            hold_frames = 6
         try:
-            hold_stale_sec = max(0.0, float(config.get("bbox_hold_max_stale_sec", 0.35) or 0.35))
+            hold_stale_sec = max(0.0, float(config.get("bbox_hold_max_stale_sec", 0.75) or 0.75))
         except Exception:
-            hold_stale_sec = 0.35
+            hold_stale_sec = 0.75
         with state.smoothing_lock:
             prev = state.smoothing_state
             now = time.time()

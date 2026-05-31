@@ -66,6 +66,11 @@ class CameraThread(QThread):
         self._inference_count = 0
         self._infer_fps = 0.0
         self._last_infer_fps_time = 0.0
+        self._display_empty_hold_sec = 0.45
+        self._last_display_faces: list[dict] = []
+        self._last_display_faces_ts = 0.0
+        self._last_display_objects: list[dict] = []
+        self._last_display_objects_ts = 0.0
 
     @property
     def camera_id(self):
@@ -169,6 +174,39 @@ class CameraThread(QThread):
         elif infer_ms < interval_budget_ms * 0.42 and current_interval > self._infer_interval_min:
             self._infer_interval = max(self._infer_interval_min, current_interval - 1)
 
+    @staticmethod
+    def _clone_display_entry(entry: dict) -> dict:
+        cloned = dict(entry)
+        bbox = cloned.get("bbox")
+        if bbox and len(bbox) == 4:
+            cloned["bbox"] = [int(round(float(v))) for v in bbox]
+        return cloned
+
+    def _with_display_empty_hold(self, result: dict) -> dict:
+        hold_sec = max(0.0, float(self._display_empty_hold_sec or 0.0))
+        if hold_sec <= 0.0:
+            return result
+        now_ts = time.time()
+        display_result = dict(result)
+
+        faces = [self._clone_display_entry(f) for f in display_result.get("all_faces", [])]
+        if faces:
+            self._last_display_faces = faces
+            self._last_display_faces_ts = now_ts
+        elif self._last_display_faces and now_ts - self._last_display_faces_ts <= hold_sec:
+            display_result["all_faces"] = [self._clone_display_entry(f) for f in self._last_display_faces]
+            if not display_result.get("face_bbox"):
+                display_result["face_bbox"] = display_result["all_faces"][0].get("bbox")
+
+        objects = [self._clone_display_entry(o) for o in display_result.get("object_bboxes", [])]
+        if objects:
+            self._last_display_objects = objects
+            self._last_display_objects_ts = now_ts
+        elif self._last_display_objects and now_ts - self._last_display_objects_ts <= hold_sec:
+            display_result["object_bboxes"] = [self._clone_display_entry(o) for o in self._last_display_objects]
+
+        return display_result
+
     def run(self):
         self._running = True
         try:
@@ -226,6 +264,11 @@ class CameraThread(QThread):
             self._infer_dim_min = 384
             self._infer_dim_max = 768
             self._adaptive_infer_dim = True
+
+        try:
+            self._display_empty_hold_sec = max(0.0, float(db.get_float("display_bbox_hold_sec", 0.45) or 0.45))
+        except Exception:
+            self._display_empty_hold_sec = 0.45
 
         self._infer_dim_min = max(256, int(self._infer_dim_min))
         self._infer_dim_max = max(self._infer_dim_min, int(self._infer_dim_max))
@@ -386,7 +429,7 @@ class CameraThread(QThread):
                 enable_heatmap=get_service_manager().is_active("heatmap_generation"),
                 inbox_context=self,
             )
-            self._last_state = result
+            self._last_state = self._with_display_empty_hold(result)
             self._last_inference_ts = time.time()
             self._inference_count += 1
             infer_fps_elapsed = self._last_inference_ts - self._last_infer_fps_time
@@ -530,6 +573,10 @@ class CameraThread(QThread):
 
     def clear_last_state(self):
         self._last_state = {}
+        self._last_display_faces = []
+        self._last_display_faces_ts = 0.0
+        self._last_display_objects = []
+        self._last_display_objects_ts = 0.0
 
     def _prepare_clip_frame(self, frame):
         max_dim = int(self._clip_buffer_max_dim or 0)

@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 41
+CURRENT_VERSION = 43
 
 
 def apply(conn):
@@ -93,7 +93,43 @@ def apply(conn):
         _migrate_v40(conn)
     if version < 41:
         _migrate_v41(conn)
+    if version < 42:
+        _migrate_v42(conn)
+    if version < 43:
+        _migrate_v43(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v43(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("display_bbox_hold_sec", "0.45", "float", "Display BBox Hold", "performance"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value='0.45', type='float', label='Display BBox Hold', section='performance' "
+        "WHERE key='display_bbox_hold_sec'"
+    )
+    conn.commit()
+
+
+def _migrate_v42(conn):
+    settings = [
+        ("bbox_hold_max_frames", "6", "int", "BBox Hold Frames", "performance"),
+        ("bbox_hold_max_stale_sec", "0.75", "float", "BBox Hold Staleness", "performance"),
+        ("display_bbox_hold_sec", "0.45", "float", "Display BBox Hold", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='6' WHERE key='bbox_hold_max_frames' AND CAST(value AS INTEGER) < 6")
+    conn.execute("UPDATE app_settings SET value='0.75' WHERE key='bbox_hold_max_stale_sec' AND CAST(value AS REAL) < 0.75")
     conn.commit()
 
 
@@ -122,8 +158,8 @@ def _migrate_v40(conn):
         ("live_infer_dim_max", "768", "int", "Live Inference Size Max", "performance"),
         ("adaptive_live_infer_dim", "1", "bool", "Adaptive Live Inference Size", "performance"),
         ("detector_max_infer_dim", "768", "int", "Detector Max Inference Size", "performance"),
-        ("bbox_hold_max_frames", "3", "int", "BBox Hold Frames", "performance"),
-        ("bbox_hold_max_stale_sec", "0.35", "float", "BBox Hold Staleness", "performance"),
+        ("bbox_hold_max_frames", "6", "int", "BBox Hold Frames", "performance"),
+        ("bbox_hold_max_stale_sec", "0.75", "float", "BBox Hold Staleness", "performance"),
         ("min_face_size", "24", "int", "Minimum Face Size", "detection"),
         ("object_min_area_ratio", "0.00025", "float", "Object Minimum Area Ratio", "detection"),
         ("person_weak_detection_confidence", "0.55", "float", "Weak Person Confidence", "detection"),

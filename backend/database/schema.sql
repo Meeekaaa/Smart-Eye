@@ -265,8 +265,9 @@ INSERT OR IGNORE INTO app_settings VALUES ('live_infer_dim_min', '384', 'int', '
 INSERT OR IGNORE INTO app_settings VALUES ('live_infer_dim_max', '768', 'int', 'Live Inference Size Max', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('adaptive_live_infer_dim', '1', 'bool', 'Adaptive Live Inference Size', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('detector_max_infer_dim', '768', 'int', 'Detector Max Inference Size', 'performance');
-INSERT OR IGNORE INTO app_settings VALUES ('bbox_hold_max_frames', '3', 'int', 'BBox Hold Frames', 'performance');
-INSERT OR IGNORE INTO app_settings VALUES ('bbox_hold_max_stale_sec', '0.35', 'float', 'BBox Hold Staleness', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('bbox_hold_max_frames', '6', 'int', 'BBox Hold Frames', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('bbox_hold_max_stale_sec', '0.75', 'float', 'BBox Hold Staleness', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('display_bbox_hold_sec', '0.45', 'float', 'Display BBox Hold', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('min_face_size', '24', 'int', 'Minimum Face Size', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('insightface_det_size', '640', 'int', 'InsightFace Detector Size', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('object_min_area_ratio', '0.00025', 'float', 'Object Minimum Area Ratio', 'detection');
