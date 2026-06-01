@@ -137,6 +137,15 @@ class GeneralTab(QWidget):
 
         bl.addWidget(_make_sdiv("Data"))
 
+        self._logs_auto_refresh_toggle = ToggleSwitch()
+        bl.addWidget(
+            _srow(
+                "Auto-refresh logs",
+                self._logs_auto_refresh_toggle,
+                hint="Refresh the Logs page every 3 seconds while it is open.",
+            )
+        )
+
         self._log_retention = QSpinBox()
         self._log_retention.setRange(1, 365)
         self._log_retention.setValue(30)
@@ -226,6 +235,7 @@ class GeneralTab(QWidget):
 
         theme_value = str(self._theme_combo.currentData() or "dark")
         db.set_setting("log_retention_days", str(self._log_retention.value()))
+        db.set_setting("logs_auto_refresh_enabled", "1" if self._logs_auto_refresh_toggle.isChecked() else "0")
         db.set_setting("auto_start_cameras", "1" if self._autostart_toggle.isChecked() else "0")
         db.set_setting("minimize_to_tray", "1" if self._minimize_tray_toggle.isChecked() else "0")
         db.set_setting("popup_notifications_enabled", "1" if self._popup_notifications_toggle.isChecked() else "0")
@@ -294,6 +304,7 @@ class GeneralTab(QWidget):
                 "theme",
                 "theme_json_path",
                 "log_retention_days",
+                "logs_auto_refresh_enabled",
                 "auto_start_cameras",
                 "minimize_to_tray",
                 "popup_notifications_enabled",
@@ -315,6 +326,7 @@ class GeneralTab(QWidget):
 
     def load(self) -> None:
         self._log_retention.setValue(int(db.get_setting("log_retention_days", "30")))
+        self._logs_auto_refresh_toggle.setChecked(db.get_bool("logs_auto_refresh_enabled", False))
         self._autostart_toggle.setChecked(db.get_bool("auto_start_cameras", False))
         self._minimize_tray_toggle.setChecked(db.get_bool("minimize_to_tray", False))
         self._popup_notifications_toggle.setChecked(db.get_bool("popup_notifications_enabled", True))

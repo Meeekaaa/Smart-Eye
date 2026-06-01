@@ -15,10 +15,12 @@ class HeatmapWidget(QLabel):
         self.setMinimumSize(320, 240)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(self._label_style())
+        self._source_pixmap = None
 
     def set_heatmap(self, heatmap_img):
         if heatmap_img is None:
             self.clear()
+            self._source_pixmap = None
             return
         if isinstance(heatmap_img, np.ndarray):
             rgb = cv2.cvtColor(heatmap_img, cv2.COLOR_BGR2RGB)
@@ -29,19 +31,31 @@ class HeatmapWidget(QLabel):
             pixmap = heatmap_img
         else:
             return
-        scaled = pixmap.scaled(
+        self._source_pixmap = pixmap
+        self._rescale_source_pixmap()
+
+    def _rescale_source_pixmap(self):
+        if self._source_pixmap is None or self._source_pixmap.isNull():
+            return
+        scaled = self._source_pixmap.scaled(
             self.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
         self.setPixmap(scaled)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._rescale_source_pixmap()
+
     def clear_heatmap(self):
+        self._source_pixmap = None
         self.clear()
         self.setText("No Heatmap Data")
         self.setStyleSheet(self._label_style(with_text=True))
 
     def set_placeholder(self, text: str):
+        self._source_pixmap = None
         self.clear()
         self.setText(text)
         self.setStyleSheet(self._label_style(with_text=True))

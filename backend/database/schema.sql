@@ -229,6 +229,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('liveness_pass_ttl_sec', '30.0', 'flo
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_failure_hold_sec', '2.0', 'float', 'Liveness Failure Hold', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_allow_bbox_fallback', '0', 'bool', 'Allow BBox Liveness Fallback', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('log_retention_days', '90', 'int', 'Log Retention (days)', 'data');
+INSERT OR IGNORE INTO app_settings VALUES ('logs_auto_refresh_enabled', '0', 'bool', 'Auto-refresh Logs', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('db_size_limit_bytes', '0', 'int', 'DB Size Limit (bytes)', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('report_logo_path', '', 'string', 'Report Logo Path', 'reports');
 INSERT OR IGNORE INTO app_settings VALUES ('smtp_host', '', 'string', 'SMTP Host', 'notifications');
@@ -252,10 +253,11 @@ INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_on_leave', '1', 'bool', 'U
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_idle_min', '5', 'int', 'Unload idle tabs after (min)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('auto_pause_live_when_idle', '0', 'bool', 'Auto-stop live cameras when idle', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('detection_interval', '1', 'int', 'Detection Interval', 'performance');
-INSERT OR IGNORE INTO app_settings VALUES ('live_clip_enabled', '0', 'bool', 'Save Live Alarm Clips', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_clip_enabled', '1', 'bool', 'Save Live Alarm Clips', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_seconds', '5', 'int', 'Live Clip Seconds', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_max_buffer_mb', '128', 'int', 'Live Clip Buffer Limit (MB)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_buffer_max_dim', '640', 'int', 'Live Clip Buffer Max Dimension', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('playback_record_enabled', '1', 'bool', 'Playback Auto-Clip', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_live_render_fps', '15', 'float', 'Live View Render FPS', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('inference_future_timeout_sec', '2.0', 'float', 'Inference Timeout (seconds)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('adaptive_live_infer_interval', '1', 'bool', 'Adaptive Live Inference Interval', 'performance');
@@ -280,6 +282,11 @@ INSERT OR IGNORE INTO app_settings VALUES ('object_tracker_new_track_confidence'
 INSERT OR IGNORE INTO app_settings VALUES ('object_tracker_confirm_hits', '2', 'int', 'Object Tracker Confirm Hits', 'detection');
 CREATE INDEX IF NOT EXISTS idx_detection_logs_timestamp ON detection_logs (timestamp);
 CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_id ON detection_logs (camera_id);
+CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_ts ON detection_logs (camera_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_detection_logs_alarm_level ON detection_logs (alarm_level);
+CREATE INDEX IF NOT EXISTS idx_detection_logs_reviewed ON detection_logs (reviewed);
+CREATE INDEX IF NOT EXISTS idx_detection_logs_gender_norm ON detection_logs (gender_norm);
+CREATE INDEX IF NOT EXISTS idx_detection_logs_has_identity ON detection_logs (has_identity);
 CREATE INDEX IF NOT EXISTS idx_known_faces_name ON known_faces (name);
 CREATE INDEX IF NOT EXISTS idx_rule_conditions_rule_id ON rule_conditions (rule_id);
 CREATE INDEX IF NOT EXISTS idx_alarm_actions_rule_id ON alarm_actions (rule_id);

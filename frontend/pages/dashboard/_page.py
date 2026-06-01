@@ -131,19 +131,29 @@ class DashboardPage(QWidget):
         _hl.addWidget(_title)
         _hl.addStretch()
 
+        self._header_actions = QWidget()
+        self._header_actions.setStyleSheet("background: transparent;")
+        self._header_actions.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        header_actions_layout = QHBoxLayout(self._header_actions)
+        header_actions_layout.setContentsMargins(0, 0, 0, 0)
+        header_actions_layout.setSpacing(SPACE_SM)
+
         self._start_btn = QPushButton("Start All")
         self._start_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._start_btn.setMinimumWidth(SIZE_BTN_W_135)
+        self._start_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._start_btn.setStyleSheet(_PRIMARY_BTN)
         self._start_btn.clicked.connect(self._start_all)
-        _hl.addWidget(self._start_btn)
+        header_actions_layout.addWidget(self._start_btn, stretch=1)
 
         self._stop_btn = QPushButton("Stop All")
         self._stop_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._stop_btn.setMinimumWidth(SIZE_BTN_W_135)
+        self._stop_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._stop_btn.setStyleSheet(_DANGER_BTN)
         self._stop_btn.clicked.connect(self._stop_all)
-        _hl.addWidget(self._stop_btn)
+        header_actions_layout.addWidget(self._stop_btn, stretch=1)
+        _hl.addWidget(self._header_actions)
 
         root.addWidget(_header_w)
 
@@ -317,6 +327,7 @@ class DashboardPage(QWidget):
         else:
             self._splitter.setSizes([700, 300])
         self._splitter.splitterMoved.connect(lambda _pos, _idx: _qs.setValue("splitter/sizes", self._splitter.sizes()))
+        QTimer.singleShot(0, self._sync_header_actions_width)
 
         root.addWidget(self._splitter, stretch=1)
 
@@ -353,6 +364,21 @@ class DashboardPage(QWidget):
 
     def _save_splitter(self, *_args):
         db.set_setting("dashboard_splitter_state", bytes(self._splitter.saveState().toHex()).decode())
+        self._sync_header_actions_width()
+
+    def _sync_header_actions_width(self):
+        if not hasattr(self, "_header_actions") or not hasattr(self, "_splitter"):
+            return
+        sizes = self._splitter.sizes()
+        if len(sizes) < 2:
+            return
+        min_width = (SIZE_BTN_W_135 * 2) + SPACE_SM
+        right_content_width = max(min_width, int(sizes[1]) - SPACE_MD - SPACE_XL)
+        self._header_actions.setFixedWidth(right_content_width)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._sync_header_actions_width)
 
     def _auto_set_grid(self, online: int):
         if online <= 1:

@@ -609,7 +609,8 @@ class MainWindow(QMainWindow):
                     "SELECT COUNT(*) AS cnt, MAX(id) AS max_id "
                     "FROM detection_logs "
                     "WHERE alarm_level>0 AND id>? "
-                    "AND COALESCE(rules_triggered, '') NOT LIKE '%\"LivenessFailure\"%'",
+                    "AND LOWER(COALESCE(rules_triggered, '')) NOT LIKE '%livenessfailure%' "
+                    "AND LOWER(COALESCE(snapshot_path, '')) NOT LIKE '%liveness_fail%'",
                     (self._alert_last_id,),
                 )
                 .fetchone()

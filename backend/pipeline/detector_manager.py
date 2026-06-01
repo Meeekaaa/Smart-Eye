@@ -706,6 +706,25 @@ class DetectorManager:
                 except Exception:
                     logger.debug("Identify failed for face in camera %s", camera_id, exc_info=True)
 
+    def identify_faces_lightweight(self, camera_id, faces):
+        """Attach known-face identities without running tracking or liveness paths."""
+        if not faces or not self._face_model or not self._face_model.is_loaded:
+            return faces
+        cam_thresh = None
+        with contextlib.suppress(Exception):
+            cam_thresh = self._get_camera_threshold_cached(camera_id)
+        for face in faces:
+            if not isinstance(face, dict) or face.get("identity") or face.get("embedding") is None:
+                continue
+            try:
+                idinfo, score = self._face_model.identify(face.get("embedding"), threshold=cam_thresh)
+                face["identity"] = idinfo
+                if idinfo:
+                    face["confidence"] = score
+            except Exception:
+                logger.debug("Playback identify failed for camera %s", camera_id, exc_info=True)
+        return faces
+
     def _get_camera_threshold_cached(self, camera_id, ttl=2.0):
         now = time.time()
         with self._camera_threshold_cache_lock:

@@ -16,6 +16,8 @@ from backend.services.pipeline_service import PipelineService
 from backend.services.service_manager import get_service_manager
 
 _DEFAULT_INFER_INTERVAL = 1
+_LIVE_CLIP_SECONDS = 5
+_LIVE_CLIP_LATENCY_SLACK_SEC = 5.0
 
 
 class CameraThread(QThread):
@@ -259,8 +261,8 @@ class CameraThread(QThread):
             configured_backends = db.get_setting("capture_backends", None)
             twitch_enabled = db.get_bool("twitch_enabled", False)
             self._inbox_enabled = db.get_bool("inbox_capture_enabled", False)
-            self._clip_enabled = db.get_bool("live_clip_enabled", False)
-            self._clip_seconds = int(db.get_int("live_clip_seconds", 5) or 5)
+            self._clip_enabled = db.get_bool("live_clip_enabled", True)
+            self._clip_seconds = _LIVE_CLIP_SECONDS
             self._clip_max_buffer_bytes = max(8, int(db.get_int("live_clip_max_buffer_mb", 128) or 128)) * 1024 * 1024
             self._clip_buffer_max_dim = max(160, int(db.get_int("live_clip_buffer_max_dim", 640) or 640))
             self._clip_min_interval = float(db.get_float("live_clip_min_interval_sec", 10.0) or 10.0)
@@ -284,8 +286,8 @@ class CameraThread(QThread):
             configured_backends = None
             twitch_enabled = False
             self._inbox_enabled = False
-            self._clip_enabled = False
-            self._clip_seconds = 5
+            self._clip_enabled = True
+            self._clip_seconds = _LIVE_CLIP_SECONDS
             self._clip_max_buffer_bytes = 128 * 1024 * 1024
             self._clip_buffer_max_dim = 640
             self._clip_min_interval = 10.0
@@ -485,7 +487,7 @@ class CameraThread(QThread):
             self._tune_infer_dim(result)
             if triggered and self._clip_enabled and self._clip_buffer:
                 if self._should_save_clip(result):
-                    clip_path = self._save_clip_from_buffer()
+                    clip_path = self._save_clip_from_buffer(event_ts=source_ts)
                     if clip_path:
                         try:
                             det = result.get("detections", {}) or {}
@@ -565,9 +567,7 @@ class CameraThread(QThread):
             self._suppress_errors = False
             frame_num += 1
             fh, fw = frame.shape[:2]
-            if self._clip_enabled:
-                now_buf = time.time()
-                self._append_clip_frame(frame, now_buf)
+            self._append_clip_frame(frame, time.time())
 
             if pending_future is not None and pending_future.done():
                 try:
@@ -633,7 +633,7 @@ class CameraThread(QThread):
         frame_bytes = int(getattr(clip_frame, "nbytes", 0) or 0)
         self._clip_buffer.append((now_ts, clip_frame))
         self._clip_buffer_bytes += frame_bytes
-        max_age = max(1, self._clip_seconds)
+        max_age = max(1.0, float(self._clip_seconds or _LIVE_CLIP_SECONDS)) + _LIVE_CLIP_LATENCY_SLACK_SEC
         while self._clip_buffer and (
             now_ts - self._clip_buffer[0][0] > max_age
             or self._clip_buffer_bytes > self._clip_max_buffer_bytes
@@ -641,13 +641,26 @@ class CameraThread(QThread):
             _, old = self._clip_buffer.popleft()
             self._clip_buffer_bytes -= int(getattr(old, "nbytes", 0) or 0)
 
-    def _save_clip_from_buffer(self) -> str | None:
+    def _clip_window_frames(self, event_ts: float | None = None) -> list[tuple[float, np.ndarray]]:
+        frames = list(self._clip_buffer)
+        if not frames:
+            return []
+        try:
+            end_ts = float(event_ts) if event_ts is not None else float(frames[-1][0])
+        except (TypeError, ValueError):
+            end_ts = float(frames[-1][0])
+        seconds = max(1.0, float(self._clip_seconds or _LIVE_CLIP_SECONDS))
+        start_ts = end_ts - seconds
+        selected = [(ts, frame) for ts, frame in frames if start_ts <= ts <= end_ts]
+        return selected or frames
+
+    def _save_clip_from_buffer(self, event_ts: float | None = None) -> str | None:
         try:
             if not db.can_persist_events():
                 logging.getLogger(__name__).warning("Live clip skipped: database size limit is reached")
                 return None
             os.makedirs("data/clips_live", exist_ok=True)
-            frames = list(self._clip_buffer)
+            frames = self._clip_window_frames(event_ts)
             if not frames:
                 return None
             ts0, _ = frames[0]

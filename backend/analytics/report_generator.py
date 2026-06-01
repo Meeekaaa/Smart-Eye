@@ -143,8 +143,15 @@ def _build_gender_pie(by_gender):
     return drawing
 
 
-def _build_heatmap_image(camera_id, date_from=None, date_to=None):
-    heatmap = generate_heatmap_from_db(camera_id=camera_id, date_from=date_from, date_to=date_to)
+def _build_heatmap_image(camera_id, date_from=None, date_to=None, rule_name=None, min_alarm_level=None, gender=None):
+    heatmap = generate_heatmap_from_db(
+        camera_id=camera_id,
+        date_from=date_from,
+        date_to=date_to,
+        rule_name=rule_name,
+        min_alarm_level=min_alarm_level,
+        gender=gender,
+    )
     if heatmap is None:
         return None
     ok, buff = cv2.imencode(".png", heatmap)
@@ -202,7 +209,14 @@ def generate_report(
         elements.append(Paragraph("Report mode: Synthetic debug analytics data is enabled.", subtitle_style))
     elements.append(Spacer(1, 20))
 
-    summary = stats_engine.get_summary(date_from, date_to, camera_id, min_alarm_level=min_alarm_level, gender=gender)
+    summary = stats_engine.get_summary(
+        date_from,
+        date_to,
+        camera_id,
+        rule_name=rule_name,
+        min_alarm_level=min_alarm_level,
+        gender=gender,
+    )
     elements.append(Paragraph("Summary", section_style))
     summary_data = [
         ["Metric", "Value"],
@@ -236,6 +250,7 @@ def generate_report(
         camera_id=camera_id,
         time_basis=time_basis,
         gender=gender,
+        min_alarm_level=min_alarm_level,
     )
     elements.append(Spacer(1, 16))
     elements.append(Paragraph("Compliance Trend", section_style))
@@ -281,7 +296,14 @@ def generate_report(
 
     elements.append(Spacer(1, 20))
     elements.append(Paragraph("Camera Activity", section_style))
-    cam_data = stats_engine.get_camera_activity_data(date_from, date_to, camera_id=camera_id)
+    cam_data = stats_engine.get_camera_activity_data(
+        date_from,
+        date_to,
+        camera_id=camera_id,
+        rule_name=rule_name,
+        min_alarm_level=min_alarm_level,
+        gender=gender,
+    )
     camera_chart = _build_camera_chart(cam_data)
     if camera_chart is not None:
         elements.append(camera_chart)
@@ -370,18 +392,25 @@ def generate_report(
     selected_heatmap_camera = camera_id
     if selected_heatmap_camera is None and cam_data:
         selected_heatmap_camera = cam_data[0].get("camera_id")
-    heatmap_image = _build_heatmap_image(camera_id=selected_heatmap_camera, date_from=date_from, date_to=date_to)
+    heatmap_image = _build_heatmap_image(
+        camera_id=selected_heatmap_camera,
+        date_from=date_from,
+        date_to=date_to,
+        rule_name=rule_name,
+        min_alarm_level=min_alarm_level,
+        gender=gender,
+    )
     if heatmap_image is not None:
         elements.append(heatmap_image)
     else:
         elements.append(Paragraph("No heatmap image is available for the selected filters.", styles["Normal"]))
 
     elements.append(Spacer(1, 18))
-    elements.append(Paragraph("Useful Notes", section_style))
+    elements.append(Paragraph("Report Methodology", section_style))
     notes = [
-        f"Total detections: {summary.get('total_detections', 0)}",
-        f"Violations: {summary.get('violations', 0)}",
-        f"Compliance rate: {summary.get('compliance_rate', 0)}%",
+        "All tables and charts use the same date, camera, rule, severity, and gender filters shown at the top of the report.",
+        "Liveness verification failures are treated as identity checks and are excluded from detection logs and violation counts.",
+        "The severity filter applies to violation counts. Total detections remain the denominator for compliance calculations.",
         f"Report generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
     ]
     elements.append(Paragraph("<br/>".join(notes), styles["Normal"]))

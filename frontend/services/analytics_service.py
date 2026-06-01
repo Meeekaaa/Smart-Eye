@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from backend.analytics import report_generator, stats_engine
-from backend.analytics.heatmap_generator import generate_heatmap_from_db, get_generator
+from backend.analytics.heatmap_generator import generate_heatmap_from_db
 
 
 class AnalyticsService:
@@ -41,13 +41,18 @@ class AnalyticsService:
         heatmap = None
         heatmap_placeholder = "Select a camera to view heatmap"
         if camera_id is not None:
-            gen = get_generator(camera_id)
-            heatmap = gen.generate() if gen.has_data() else None
-            if heatmap is None:
-                heatmap = generate_heatmap_from_db(camera_id=camera_id, date_from=date_from, date_to=date_to)
+            heatmap = generate_heatmap_from_db(
+                camera_id=camera_id,
+                date_from=date_from,
+                date_to=date_to,
+                rule_name=rule_name,
+                min_alarm_level=min_alarm_level,
+                gender=gender,
+            )
             heatmap_placeholder = "No heatmap data in selected range"
 
         return {
+            "is_dummy": stats_engine.is_dummy_analytics_enabled(),
             "stats": {
                 "total": total,
                 "violations": violations,
@@ -70,6 +75,7 @@ class AnalyticsService:
                 camera_id=camera_id,
                 time_basis=time_basis,
                 gender=gender,
+                min_alarm_level=min_alarm_level,
             ),
             "hourly": stats_engine.get_hourly_violation_chart(
                 date_from,
@@ -80,7 +86,14 @@ class AnalyticsService:
                 time_basis=time_basis,
                 gender=gender,
             ),
-            "camera_activity": stats_engine.get_camera_activity_data(date_from, date_to, camera_id=camera_id),
+            "camera_activity": stats_engine.get_camera_activity_data(
+                date_from,
+                date_to,
+                camera_id=camera_id,
+                rule_name=rule_name,
+                min_alarm_level=min_alarm_level,
+                gender=gender,
+            ),
             "heatmap": heatmap,
             "heatmap_placeholder": heatmap_placeholder,
             "top_violators": stats_engine.get_person_violations(
@@ -93,9 +106,6 @@ class AnalyticsService:
                 gender=gender,
             ),
         }
-
-    def reset_heatmap(self, camera_id: int) -> None:
-        get_generator(camera_id).reset()
 
     def export_pdf(self, path: str, **kwargs) -> None:
         report_generator.generate_report(path, **kwargs)
