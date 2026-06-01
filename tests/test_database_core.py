@@ -166,6 +166,7 @@ def test_debug_service_seed_support_uses_db_writer(temp_db):
 def test_analytics_summary_honors_rule_filter(temp_db):
     cam_id = temp_db.add_camera("Cam 1", "debug://cam/1")
     temp_db.add_detection_log(cam_id, identity="Alice", detections={}, rules_triggered=["Rule A"], alarm_level=1)
+    temp_db.add_detection_log(cam_id, identity="Eve", detections={}, rules_triggered=["Rule AB"], alarm_level=1)
     temp_db.add_detection_log(cam_id, identity="Bob", detections={}, rules_triggered=["Rule B"], alarm_level=1)
 
     summary = stats_engine.get_summary(camera_id=cam_id, rule_name="Rule A")
@@ -174,10 +175,73 @@ def test_analytics_summary_honors_rule_filter(temp_db):
     assert summary["violations"] == 1
 
 
+def test_analytics_filters_are_consistent_and_exclude_unknown_violators(temp_db):
+    cam_id = temp_db.add_camera("Cam 1", "debug://cam/1")
+    other_cam_id = temp_db.add_camera("Cam 2", "debug://cam/2")
+    temp_db.seed_detection_logs(
+        [
+            {
+                "timestamp": "2026-01-01 08:00:00",
+                "camera_id": cam_id,
+                "identity": "Alice",
+                "detections": {"identity": "Alice", "gender": "male"},
+                "rules_triggered": ["Rule A"],
+                "alarm_level": 2,
+            },
+            {
+                "timestamp": "2026-01-01 08:10:00",
+                "camera_id": cam_id,
+                "identity": "Unknown",
+                "detections": {"identity": "Unknown", "gender": "male"},
+                "rules_triggered": ["Rule A"],
+                "alarm_level": 2,
+            },
+            {
+                "timestamp": "2026-01-01 08:20:00",
+                "camera_id": cam_id,
+                "identity": "Dave",
+                "detections": {"identity": "Dave", "gender": "male"},
+                "rules_triggered": ["Rule A"],
+                "alarm_level": 0,
+            },
+            {
+                "timestamp": "2026-01-01 08:30:00",
+                "camera_id": cam_id,
+                "identity": "Carol",
+                "detections": {"identity": "Carol", "gender": "female"},
+                "rules_triggered": ["Rule A"],
+                "alarm_level": 2,
+            },
+            {
+                "timestamp": "2026-01-01 08:40:00",
+                "camera_id": other_cam_id,
+                "identity": "Eve",
+                "detections": {"identity": "Eve", "gender": "male"},
+                "rules_triggered": ["Rule AB"],
+                "alarm_level": 2,
+            },
+        ],
+        ignore_size_limit=True,
+    )
+
+    summary = stats_engine.get_summary(rule_name="Rule A", min_alarm_level=2, gender="male")
+    activity = stats_engine.get_camera_activity_data(rule_name="Rule A", min_alarm_level=2, gender="male")
+    top = stats_engine.get_person_violations(rule_name="Rule A", min_alarm_level=2, gender="male")
+    trend = stats_engine.get_compliance_trend(rule_name="Rule A", min_alarm_level=2, gender="male")
+
+    assert summary["total_detections"] == 3
+    assert summary["violations"] == 2
+    assert summary["compliant"] == 1
+    assert activity == [{"camera_id": cam_id, "camera_name": "Cam 1", "count": 2}]
+    assert top == [{"identity": "Alice", "gender": "male", "count": 1}]
+    assert trend == [{"date": "2026-01-01", "total": 3, "compliant": 1, "rate": 33.3}]
+
+
 def test_report_export_summary_honors_rule_filter(monkeypatch, tmp_path):
     from backend.analytics import report_generator
 
     captured = {}
+    captured_heatmap = {}
 
     def fake_get_summary(*args, **kwargs):
         captured.update(kwargs)
@@ -195,11 +259,18 @@ def test_report_export_summary_honors_rule_filter(monkeypatch, tmp_path):
     monkeypatch.setattr(report_generator.stats_engine, "get_camera_activity_data", lambda *args, **kwargs: [])
     monkeypatch.setattr(report_generator.stats_engine, "get_person_violations", lambda *args, **kwargs: [])
     monkeypatch.setattr(report_generator.stats_engine, "get_gender_violations", lambda **kwargs: [])
-    monkeypatch.setattr(report_generator, "_build_heatmap_image", lambda **kwargs: None)
+    def fake_build_heatmap_image(**kwargs):
+        captured_heatmap.update(kwargs)
+        return None
 
-    report_generator.generate_report(str(tmp_path / "report.pdf"), rule_name="Rule A")
+    monkeypatch.setattr(report_generator, "_build_heatmap_image", fake_build_heatmap_image)
+
+    report_generator.generate_report(str(tmp_path / "report.pdf"), rule_name="Rule A", min_alarm_level=2, gender="male")
 
     assert captured["rule_name"] == "Rule A"
+    assert captured_heatmap["rule_name"] == "Rule A"
+    assert captured_heatmap["min_alarm_level"] == 2
+    assert captured_heatmap["gender"] == "male"
 
 
 def test_snapshot_delete_clears_detection_log_link(temp_db, tmp_path):

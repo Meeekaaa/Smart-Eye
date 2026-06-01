@@ -103,7 +103,17 @@ def _iter_bboxes(payload):
                 yield bbox
 
 
-def generate_heatmap_from_db(camera_id, date_from=None, date_to=None, width=640, height=480, max_rows=12000):
+def generate_heatmap_from_db(
+    camera_id,
+    date_from=None,
+    date_to=None,
+    width=640,
+    height=480,
+    max_rows=12000,
+    rule_name=None,
+    min_alarm_level=None,
+    gender=None,
+):
     if camera_id is None:
         return None
     gen = HeatmapGenerator(width=width, height=height)
@@ -120,6 +130,18 @@ def generate_heatmap_from_db(camera_id, date_from=None, date_to=None, width=640,
     if date_to:
         q += " AND timestamp<=?"
         params.append(date_to)
+    if rule_name:
+        q += (
+            " AND (EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(rules_triggered) THEN rules_triggered ELSE '[]' END) WHERE value=?) "
+            "OR rules_triggered=?)"
+        )
+        params.extend([str(rule_name), str(rule_name)])
+    if min_alarm_level is not None:
+        q += " AND alarm_level>=?"
+        params.append(int(min_alarm_level))
+    if gender:
+        q += " AND gender_norm=?"
+        params.append(str(gender).strip().lower())
     q += " ORDER BY timestamp DESC LIMIT ?"
     params.append(max_rows)
 

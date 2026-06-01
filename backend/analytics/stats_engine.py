@@ -121,7 +121,7 @@ def _dummy_summary(min_alarm_level=None, gender=None):
     }
 
 
-def _dummy_compliance_trend(date_from=None, date_to=None, camera_id=None, gender=None):
+def _dummy_compliance_trend(date_from=None, date_to=None, camera_id=None, gender=None, min_alarm_level=None):
     gender_key = _normalize_gender(gender)
     gender_offsets = {None: 0.0, "male": -1.2, "female": 1.1, "unknown": -4.5}
     camera_offset = 0.0
@@ -130,11 +130,17 @@ def _dummy_compliance_trend(date_from=None, date_to=None, camera_id=None, gender
             camera_offset = (int(camera_id) % 3 - 1) * 0.8
         except Exception:
             camera_offset = 0.0
+    severity_offset = 0.0
+    if min_alarm_level is not None:
+        try:
+            severity_offset = min(3, max(1, int(min_alarm_level))) * 1.2
+        except Exception:
+            severity_offset = 1.2
     trend = []
     for idx, day in enumerate(_build_dummy_days(date_from, date_to, max_days=14)):
         total = 90 + ((idx * 17) % 55)
         rate = 81.5 + idx * 0.45 + (1.1 if idx % 5 == 0 else -0.7 if idx % 4 == 0 else 0.0)
-        rate += gender_offsets.get(gender_key, 0.0) + camera_offset
+        rate += gender_offsets.get(gender_key, 0.0) + camera_offset + severity_offset
         rate = max(60.0, min(98.0, rate))
         compliant = int(round(total * rate / 100.0))
         trend.append(
@@ -194,10 +200,15 @@ def _dummy_person_violations(limit=20, min_alarm_level=None, gender=None, camera
     return rows[: max(1, int(limit or 20))]
 
 
-def _dummy_camera_activity(camera_id=None):
+def _dummy_camera_activity(camera_id=None, min_alarm_level=None, gender=None, rule_name=None):
     cameras = db.get_cameras()
     rows = []
     profile = [316, 287, 242, 198, 167, 143]
+    factor = _alarm_factor(min_alarm_level)
+    if gender:
+        factor *= {"male": 0.9, "female": 0.75, "unknown": 0.35}.get(_normalize_gender(gender), 1.0)
+    if rule_name:
+        factor *= 0.82
     if cameras:
         for idx, cam in enumerate(cameras):
             cam_id = cam.get("id")
@@ -212,17 +223,17 @@ def _dummy_camera_activity(camera_id=None):
                 {
                     "camera_id": cam_id,
                     "camera_name": cam.get("name") or f"Camera {idx + 1}",
-                    "count": profile[idx % len(profile)] + cam_mod,
+                    "count": max(0, int(round((profile[idx % len(profile)] + cam_mod) * factor))),
                 }
             )
         if rows:
             return rows
     if camera_id is not None:
-        return [{"camera_id": camera_id, "camera_name": f"Camera {camera_id}", "count": 224}]
+        return [{"camera_id": camera_id, "camera_name": f"Camera {camera_id}", "count": max(0, int(round(224 * factor)))}]
     return [
-        {"camera_id": 1, "camera_name": "Front Entrance", "count": 316},
-        {"camera_id": 2, "camera_name": "Back Door", "count": 287},
-        {"camera_id": 3, "camera_name": "Loading Dock", "count": 242},
+        {"camera_id": 1, "camera_name": "Front Entrance", "count": max(0, int(round(316 * factor)))},
+        {"camera_id": 2, "camera_name": "Back Door", "count": max(0, int(round(287 * factor)))},
+        {"camera_id": 3, "camera_name": "Loading Dock", "count": max(0, int(round(242 * factor)))},
     ]
 
 
@@ -288,10 +299,26 @@ def get_summary(date_from=None, date_to=None, camera_id=None, min_alarm_level=No
     }
 
 
-def get_compliance_trend(rule_name=None, date_from=None, date_to=None, camera_id=None, time_basis=None, gender=None):
+def get_compliance_trend(
+    rule_name=None, date_from=None, date_to=None, camera_id=None, time_basis=None, gender=None, min_alarm_level=None
+):
     if is_dummy_analytics_enabled():
-        return _dummy_compliance_trend(date_from=date_from, date_to=date_to, camera_id=camera_id, gender=gender)
-    rows = db.get_compliance_over_time(rule_name, date_from, date_to, camera_id=camera_id, time_basis=time_basis, gender=gender)
+        return _dummy_compliance_trend(
+            date_from=date_from,
+            date_to=date_to,
+            camera_id=camera_id,
+            gender=gender,
+            min_alarm_level=min_alarm_level,
+        )
+    rows = db.get_compliance_over_time(
+        rule_name,
+        date_from,
+        date_to,
+        camera_id=camera_id,
+        time_basis=time_basis,
+        gender=gender,
+        min_alarm_level=min_alarm_level,
+    )
     trend = []
     for row in rows:
         total = row.get("total", 0) or 0
@@ -348,10 +375,17 @@ def get_person_violations(date_from=None, date_to=None, camera_id=None, rule_nam
     )
 
 
-def get_camera_activity_data(date_from=None, date_to=None, camera_id=None):
+def get_camera_activity_data(date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, gender=None):
     if is_dummy_analytics_enabled():
-        return _dummy_camera_activity(camera_id=camera_id)
-    return db.get_camera_activity(date_from, date_to, camera_id=camera_id)
+        return _dummy_camera_activity(camera_id=camera_id, min_alarm_level=min_alarm_level, gender=gender, rule_name=rule_name)
+    return db.get_camera_activity(
+        date_from,
+        date_to,
+        camera_id=camera_id,
+        rule_name=rule_name,
+        min_alarm_level=min_alarm_level,
+        gender=gender,
+    )
 
 
 def get_identified_count(date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, gender=None):

@@ -1382,6 +1382,18 @@ def _internal_liveness_exclusion(alias: str | None = None) -> str:
     )
 
 
+def _append_rule_name_filter(q: str, params: list, column: str, rule_name) -> str:
+    name = str(rule_name or "").strip()
+    if not name:
+        return q
+    q += (
+        f" AND (EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid({column}) THEN {column} ELSE '[]' END) WHERE value=?) "
+        f"OR {column}=?)"
+    )
+    params.extend([name, name])
+    return q
+
+
 def _detection_log_filter_sql(
     *,
     camera_id=None,
@@ -1419,9 +1431,7 @@ def _detection_log_filter_sql(
         )
         like = f"%{search_text}%"
         params.extend([like, like, like, like, like])
-    if rule_name:
-        q += " AND dl.rules_triggered LIKE ?"
-        params.append(f"%{rule_name}%")
+    q = _append_rule_name_filter(q, params, "dl.rules_triggered", rule_name)
     if alarm_level is not None:
         q += " AND dl.alarm_level>=?"
         params.append(int(alarm_level))
@@ -1830,9 +1840,14 @@ def backup(dest_path):
 
 
 def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_level=None, gender=None, rule_name=None):
-    q = "SELECT COUNT(*) as total, SUM(CASE WHEN alarm_level>0 THEN 1 ELSE 0 END) as violations FROM detection_logs WHERE 1=1"
-    q += _internal_liveness_exclusion()
     params = []
+    if min_alarm_level is not None:
+        violation_expr = "SUM(CASE WHEN alarm_level>=? THEN 1 ELSE 0 END) as violations"
+        params.append(int(min_alarm_level))
+    else:
+        violation_expr = "SUM(CASE WHEN alarm_level>0 THEN 1 ELSE 0 END) as violations"
+    q = f"SELECT COUNT(*) as total, {violation_expr} FROM detection_logs WHERE 1=1"
+    q += _internal_liveness_exclusion()
     if date_from:
         q += " AND timestamp>=?"
         params.append(date_from)
@@ -1842,12 +1857,7 @@ def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_
     if camera_id:
         q += " AND camera_id=?"
         params.append(camera_id)
-    if min_alarm_level is not None:
-        q += " AND alarm_level>=?"
-        params.append(int(min_alarm_level))
-    if rule_name:
-        q += " AND rules_triggered LIKE ?"
-        params.append(f"%{rule_name}%")
+    q = _append_rule_name_filter(q, params, "rules_triggered", rule_name)
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
@@ -1878,9 +1888,7 @@ def get_hourly_violations(
     if camera_id:
         q += " AND camera_id=?"
         params.append(camera_id)
-    if rule_name:
-        q += " AND rules_triggered LIKE ?"
-        params.append(f"%{rule_name}%")
+    q = _append_rule_name_filter(q, params, "rules_triggered", rule_name)
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
@@ -1895,7 +1903,7 @@ def get_violations_by_person(
            COALESCE(MAX(CASE WHEN gender_norm != 'unknown' THEN gender_norm END), 'unknown') as gender,
            COUNT(*) as count
            FROM detection_logs
-           WHERE identity IS NOT NULL AND identity != ''"""
+           WHERE has_identity=1 AND identity IS NOT NULL AND identity != ''"""
     q += _internal_liveness_exclusion()
     params = []
     if min_alarm_level is not None:
@@ -1912,9 +1920,7 @@ def get_violations_by_person(
     if camera_id:
         q += " AND camera_id=?"
         params.append(camera_id)
-    if rule_name:
-        q += " AND rules_triggered LIKE ?"
-        params.append(f"%{rule_name}%")
+    q = _append_rule_name_filter(q, params, "rules_triggered", rule_name)
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
@@ -1941,9 +1947,7 @@ def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_
     if camera_id:
         q += " AND camera_id=?"
         params.append(camera_id)
-    if rule_name:
-        q += " AND rules_triggered LIKE ?"
-        params.append(f"%{rule_name}%")
+    q = _append_rule_name_filter(q, params, "rules_triggered", rule_name)
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
@@ -1960,7 +1964,7 @@ def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_
     ]
 
 
-def get_camera_activity(date_from=None, date_to=None, camera_id=None):
+def get_camera_activity(date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, gender=None):
     q = """SELECT c.id as camera_id, c.name as camera_name, COUNT(dl.id) as count
            FROM cameras c
            LEFT JOIN detection_logs dl ON c.id=dl.camera_id"""
@@ -1975,26 +1979,41 @@ def get_camera_activity(date_from=None, date_to=None, camera_id=None):
     if camera_id:
         conditions.append("c.id=?")
         params.append(camera_id)
+    if min_alarm_level is not None:
+        conditions.append("dl.alarm_level>=?")
+        params.append(int(min_alarm_level))
+    if rule_name:
+        conditions.append(
+            "(EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(dl.rules_triggered) THEN dl.rules_triggered ELSE '[]' END) WHERE value=?) "
+            "OR dl.rules_triggered=?)"
+        )
+        params.extend([str(rule_name), str(rule_name)])
+    if gender:
+        conditions.append("dl.gender_norm=?")
+        params.append(_normalize_gender_value(gender))
     if conditions:
         q += " WHERE " + " AND ".join(conditions)
     q += " GROUP BY c.id ORDER BY count DESC"
     return [dict(r) for r in _conn.execute(q, params).fetchall()]
 
 
-def get_compliance_over_time(rule_name=None, date_from=None, date_to=None, camera_id=None, time_basis=None, gender=None):
+def get_compliance_over_time(rule_name=None, date_from=None, date_to=None, camera_id=None, time_basis=None, gender=None, min_alarm_level=None):
     if time_basis == "Local":
         date_expr = "DATE(timestamp, 'localtime')"
     else:
         date_expr = "DATE(timestamp)"
+    params = []
+    if min_alarm_level is not None:
+        compliant_expr = "SUM(CASE WHEN alarm_level<? THEN 1 ELSE 0 END) as compliant"
+        params.append(int(min_alarm_level))
+    else:
+        compliant_expr = "SUM(CASE WHEN alarm_level=0 THEN 1 ELSE 0 END) as compliant"
     q = f"""SELECT {date_expr} as day,
            COUNT(*) as total,
-           SUM(CASE WHEN alarm_level=0 THEN 1 ELSE 0 END) as compliant
+           {compliant_expr}
            FROM detection_logs WHERE 1=1"""
     q += _internal_liveness_exclusion()
-    params = []
-    if rule_name:
-        q += " AND rules_triggered LIKE ?"
-        params.append(f"%{rule_name}%")
+    q = _append_rule_name_filter(q, params, "rules_triggered", rule_name)
     if date_from:
         q += " AND timestamp>=?"
         params.append(date_from)
@@ -2020,9 +2039,7 @@ def get_identified_count(date_from=None, date_to=None, camera_id=None, rule_name
     if min_alarm_level is not None:
         q += " AND alarm_level>=?"
         params.append(int(min_alarm_level))
-    if rule_name:
-        q += " AND rules_triggered LIKE ?"
-        params.append(f"%{rule_name}%")
+    q = _append_rule_name_filter(q, params, "rules_triggered", rule_name)
     if date_from:
         q += " AND timestamp>=?"
         params.append(date_from)

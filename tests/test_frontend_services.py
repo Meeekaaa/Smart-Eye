@@ -1,4 +1,5 @@
 from frontend.services.camera_service import CameraService
+from frontend.services.analytics_service import AnalyticsService
 from frontend.services.log_service import LogService
 from frontend.services.notification_validation import validate_notification_target
 from frontend.services.rules_service import RulesService
@@ -116,3 +117,54 @@ def test_log_service_passes_structured_filters_to_database(monkeypatch):
     assert captured_rows["alarm_level"] == 2
     assert captured_rows["limit"] == 10
     assert captured_rows["offset"] == 10
+
+
+def test_analytics_service_passes_filters_to_all_views(monkeypatch):
+    captured = {"trend": {}, "camera": {}, "heatmap": {}}
+
+    monkeypatch.setattr(
+        "frontend.services.analytics_service.stats_engine.get_summary",
+        lambda *args, **kwargs: {"total_detections": 3, "violations": 1, "compliant": 2, "compliance_rate": 66.7},
+    )
+    monkeypatch.setattr(
+        "frontend.services.analytics_service.stats_engine.get_gender_violations",
+        lambda **kwargs: [{"gender": "male", "count": 1}, {"gender": "female", "count": 0}, {"gender": "unknown", "count": 0}],
+    )
+    monkeypatch.setattr("frontend.services.analytics_service.stats_engine.get_identified_count", lambda **kwargs: 1)
+
+    def fake_trend(**kwargs):
+        captured["trend"].update(kwargs)
+        return []
+
+    def fake_camera(*args, **kwargs):
+        captured["camera"].update(kwargs)
+        return []
+
+    def fake_heatmap(**kwargs):
+        captured["heatmap"].update(kwargs)
+        return None
+
+    monkeypatch.setattr("frontend.services.analytics_service.stats_engine.get_compliance_trend", fake_trend)
+    monkeypatch.setattr("frontend.services.analytics_service.stats_engine.get_hourly_violation_chart", lambda *args, **kwargs: [])
+    monkeypatch.setattr("frontend.services.analytics_service.stats_engine.get_camera_activity_data", fake_camera)
+    monkeypatch.setattr("frontend.services.analytics_service.stats_engine.get_person_violations", lambda *args, **kwargs: [])
+    monkeypatch.setattr("frontend.services.analytics_service.stats_engine.is_dummy_analytics_enabled", lambda: False)
+    monkeypatch.setattr("frontend.services.analytics_service.generate_heatmap_from_db", fake_heatmap)
+
+    AnalyticsService().load_view_model(
+        date_from="2026-01-01 00:00:00",
+        date_to="2026-01-01 23:59:59",
+        time_basis="Local",
+        camera_id=7,
+        rule_name="Rule A",
+        min_alarm_level=2,
+        gender="male",
+    )
+
+    assert captured["trend"]["min_alarm_level"] == 2
+    assert captured["camera"]["rule_name"] == "Rule A"
+    assert captured["camera"]["min_alarm_level"] == 2
+    assert captured["camera"]["gender"] == "male"
+    assert captured["heatmap"]["rule_name"] == "Rule A"
+    assert captured["heatmap"]["min_alarm_level"] == 2
+    assert captured["heatmap"]["gender"] == "male"
