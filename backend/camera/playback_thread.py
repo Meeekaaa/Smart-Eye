@@ -14,6 +14,7 @@ from PySide6.QtCore import QMutex, QThread, Signal
 from backend.pipeline.detector_manager import get_manager
 from backend.pipeline.inference_utils import build_state
 from backend.repository import db
+from utils.runtime_metrics import record_runtime_metric
 
 _AUTO_CLIP_SECONDS = 5
 _AUTO_CLIP_LATENCY_SLACK_SECONDS = 5
@@ -111,8 +112,11 @@ class PlaybackThread(QThread):
         last_detect_frame_idx = -1
         frame_idx = 0
         _clip_cooldown = 0
+        display_frame_count = 0
+        last_display_fps_ts = time.perf_counter()
 
         def _evaluate_frame(frame, w, h, infer_idx):
+            t0 = time.perf_counter()
             detection_results = detector.process_frame(
                 frame,
                 self._camera_id,
@@ -127,6 +131,12 @@ class PlaybackThread(QThread):
                 detection_results["faces"] = []
             elif detection_results.get("faces"):
                 detector.identify_faces_lightweight(self._camera_id, detection_results["faces"])
+            record_runtime_metric(
+                "average_inference_time_per_frame",
+                (time.perf_counter() - t0) * 1000.0,
+                context={"source": "playback", "camera_id": self._camera_id},
+                min_interval_sec=1.0,
+            )
             if self._disabled_object_classes:
                 detection_results["objects"] = [
                     o
@@ -273,6 +283,18 @@ class PlaybackThread(QThread):
                 _clip_cooldown -= 1
 
             self.frame_ready.emit(self._camera_id, frame, primary_state)
+            display_frame_count += 1
+            display_fps_now = time.perf_counter()
+            display_fps_elapsed = display_fps_now - last_display_fps_ts
+            if display_fps_elapsed >= 1.0:
+                record_runtime_metric(
+                    "average_displayed_fps",
+                    display_frame_count / display_fps_elapsed,
+                    context={"source": "playback", "camera_id": self._camera_id},
+                    min_interval_sec=1.0,
+                )
+                display_frame_count = 0
+                last_display_fps_ts = display_fps_now
             if not self._paused:
                 frame_idx += 1
             elapsed = time.time() - t_start

@@ -41,6 +41,8 @@ data/clips_live/*
 data/cache/*
 
 docs/
+media/
+report_metrics/
 final_report.md
 final_report.pdf
 tests/notes.txt

@@ -74,6 +74,7 @@ from frontend.ui_tokens import (
     SPACE_XL,
     SPACE_XXXS,
 )
+from utils.runtime_metrics import record_runtime_metric
 
 
 warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*disconnect.*")
@@ -512,6 +513,22 @@ class DashboardPage(QWidget):
             key = (camera_id, rid)
             current_ids.add(key)
             if key not in self._alarm_badges:
+                try:
+                    trigger_perf = float(state.get("_rule_trigger_perf", 0.0) or 0.0)
+                    if trigger_perf > 0.0:
+                        visible_delay_ms = (time.perf_counter() - trigger_perf) * 1000.0
+                        visible_delay_ms = max(visible_delay_ms, float(v.get("duration", 0.0) or 0.0) * 1000.0)
+                        record_runtime_metric(
+                            "alarm_response_delay",
+                            visible_delay_ms,
+                            context={
+                                "camera_id": camera_id,
+                                "rule_id": rid,
+                                "rule_name": str(v.get("rule_name") or ""),
+                            },
+                        )
+                except Exception:
+                    logger.debug("Failed to record alarm response delay", exc_info=True)
                 badge = AlarmBadgeWidget(v["rule_name"], v["level"])
                 self._alarms_layout.addWidget(badge)
                 self._alarm_badges[key] = badge

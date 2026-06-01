@@ -1,5 +1,6 @@
 import io
 import os
+import time
 from datetime import datetime
 
 import cv2
@@ -23,6 +24,7 @@ from reportlab.platypus import (
 from backend.analytics.heatmap_generator import generate_heatmap_from_db
 from backend.analytics import stats_engine
 from utils import config
+from utils.runtime_metrics import record_runtime_metric
 
 
 def _safe_int(value, default=0):
@@ -166,6 +168,7 @@ def _build_heatmap_image(camera_id, date_from=None, date_to=None, rule_name=None
 def generate_report(
     filepath, date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, time_basis=None, gender=None
 ):
+    started_at = time.perf_counter()
     doc = SimpleDocTemplate(filepath, pagesize=A4, topMargin=30, bottomMargin=30)
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("ReportTitle", parent=styles["Title"], fontSize=24, textColor=colors.HexColor("#1a73e8"), spaceAfter=20)
@@ -416,4 +419,9 @@ def generate_report(
     elements.append(Paragraph("<br/>".join(notes), styles["Normal"]))
 
     doc.build(elements)
+    record_runtime_metric(
+        "report_export_time",
+        (time.perf_counter() - started_at) * 1000.0,
+        context={"path": str(filepath)},
+    )
     return filepath

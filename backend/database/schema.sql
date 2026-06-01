@@ -222,6 +222,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('liveness_pass_revoke_threshold', '0.
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_identity_track_min_iou', '0.20', 'float', 'Liveness Identity Track Minimum IOU', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_failure_log_cooldown_sec', '20.0', 'float', 'Liveness Failure Log Cooldown', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_block_screen_presentations', '1', 'bool', 'Block Screen Presentations', 'detection');
+INSERT OR IGNORE INTO app_settings VALUES ('liveness_skip_presentation_for_stream_sources', '1', 'bool', 'Skip Presentation Block For Stream Sources', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_challenge_seconds', '8.0', 'float', 'Liveness Challenge Seconds', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_yaw_threshold', '0.16', 'float', 'Liveness Head Turn Threshold', 'detection');
 INSERT OR IGNORE INTO app_settings VALUES ('liveness_pose_frames', '2', 'int', 'Liveness Consecutive Pose Frames', 'detection');
@@ -232,6 +233,7 @@ INSERT OR IGNORE INTO app_settings VALUES ('log_retention_days', '90', 'int', 'L
 INSERT OR IGNORE INTO app_settings VALUES ('logs_auto_refresh_enabled', '0', 'bool', 'Auto-refresh Logs', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('db_size_limit_bytes', '0', 'int', 'DB Size Limit (bytes)', 'data');
 INSERT OR IGNORE INTO app_settings VALUES ('report_logo_path', '', 'string', 'Report Logo Path', 'reports');
+INSERT OR IGNORE INTO app_settings VALUES ('runtime_metrics_enabled', '1', 'bool', 'Record Runtime Metrics', 'reports');
 INSERT OR IGNORE INTO app_settings VALUES ('smtp_host', '', 'string', 'SMTP Host', 'notifications');
 INSERT OR IGNORE INTO app_settings VALUES ('smtp_port', '587', 'int', 'SMTP Port', 'notifications');
 INSERT OR IGNORE INTO app_settings VALUES ('smtp_user', '', 'string', 'SMTP Username', 'notifications');

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from typing import ClassVar
 
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPixmap
@@ -477,7 +478,7 @@ class _GenderPicker(QWidget):
 class ConditionRow(QFrame):
     remove_requested = Signal(object)
 
-    _OPS = [
+    _OPS: ClassVar[list[tuple[str, str]]] = [
         ("equals", "eq"),
         ("not equals", "neq"),
         ("contains", "contains"),
@@ -486,7 +487,7 @@ class ConditionRow(QFrame):
         ("greater than or equal", "gte"),
         ("less than or equal", "lte"),
     ]
-    _OPS_BY_ATTR = {
+    _OPS_BY_ATTR: ClassVar[dict[str, tuple[str, ...]]] = {
         "identity": ("eq", "neq", "contains"),
         "gender": ("eq", "neq"),
         "object": ("eq", "neq", "contains"),

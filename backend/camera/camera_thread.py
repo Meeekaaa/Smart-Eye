@@ -14,6 +14,7 @@ from backend.pipeline.detector_manager import get_manager
 from backend.pipeline.inference_utils import build_state
 from backend.services.pipeline_service import PipelineService
 from backend.services.service_manager import get_service_manager
+from utils.runtime_metrics import record_runtime_metric
 
 _DEFAULT_INFER_INTERVAL = 1
 _LIVE_CLIP_SECONDS = 5
@@ -253,6 +254,8 @@ class CameraThread(QThread):
 
     def run(self):
         self._running = True
+        run_started_at = time.perf_counter()
+        startup_recorded = False
         try:
             os.environ.setdefault("OPENCV_VIDEOIO_PRIORITY_MSMF", "1")
             os.environ.setdefault("OPENCV_VIDEOIO_DISABLE_DIRECTSHOW", "1")
@@ -422,9 +425,15 @@ class CameraThread(QThread):
 
         def _do_inference(infer_frame, cid, fw, fh, infer_scale=1.0, source_ts=None):
             try:
-                t0 = time.time()
+                t0 = time.perf_counter()
                 det = detector.process_frame(infer_frame, cid)
-                infer_ms = (time.time() - t0) * 1000.0
+                infer_ms = (time.perf_counter() - t0) * 1000.0
+                record_runtime_metric(
+                    "average_inference_time_per_frame",
+                    infer_ms,
+                    context={"source": "live_camera", "camera_id": cid},
+                    min_interval_sec=1.0,
+                )
                 if infer_scale < 0.999:
                     _inv = 1.0 / infer_scale
                     for _fi in det.get("faces", []):
@@ -437,6 +446,7 @@ class CameraThread(QThread):
                             _oi["bbox"] = [int(_b[0] * _inv), int(_b[1] * _inv), int(_b[2] * _inv), int(_b[3] * _inv)]
                 primary, all_triggered = build_state(det, cid)
                 primary["_triggered"] = all_triggered
+                primary["_rule_trigger_perf"] = time.perf_counter() if all_triggered else 0.0
                 primary["_fw"] = fw
                 primary["_fh"] = fh
                 primary["_infer_ms"] = infer_ms
@@ -566,6 +576,13 @@ class CameraThread(QThread):
             consecutive_failures = 0
             self._suppress_errors = False
             frame_num += 1
+            if not startup_recorded:
+                record_runtime_metric(
+                    "camera_startup_time",
+                    (time.perf_counter() - run_started_at) * 1000.0,
+                    context={"camera_id": self._camera_id, "source": str(self._source)},
+                )
+                startup_recorded = True
             fh, fw = frame.shape[:2]
             self._append_clip_frame(frame, time.time())
 
@@ -587,6 +604,12 @@ class CameraThread(QThread):
                 self._fps = self._frame_count / (now - self._last_fps_time)
                 self._frame_count = 0
                 self._last_fps_time = now
+                record_runtime_metric(
+                    "average_displayed_fps",
+                    self._fps,
+                    context={"source": "live_camera", "camera_id": self._camera_id},
+                    min_interval_sec=1.0,
+                )
                 self.fps_updated.emit(self._camera_id, self._fps)
             if self._last_inference_ts > 0.0 and now - self._last_inference_ts >= 2.0:
                 self._infer_fps = 0.0
