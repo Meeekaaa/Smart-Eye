@@ -73,6 +73,7 @@ def test_log_service_uses_page_offset(monkeypatch):
         captured.update(kwargs)
         return []
 
+    monkeypatch.setattr("frontend.services.log_service.db.count_detection_logs", lambda **kwargs: 0)
     monkeypatch.setattr("frontend.services.log_service.db.get_detection_logs", fake_get_detection_logs)
 
     LogService().get_logs(limit=25, page=3)
@@ -81,24 +82,37 @@ def test_log_service_uses_page_offset(monkeypatch):
     assert captured["offset"] == 50
 
 
-def test_log_service_filters_type_before_pagination(monkeypatch):
-    calls = []
+def test_log_service_passes_structured_filters_to_database(monkeypatch):
+    captured_count = {}
+    captured_rows = {}
+
+    def fake_count_detection_logs(**kwargs):
+        captured_count.update(kwargs)
+        return 42
 
     def fake_get_detection_logs(**kwargs):
-        calls.append(kwargs)
-        offset = kwargs.get("offset", 0)
-        if offset == 0:
-            return [{"id": idx, "identity": "", "detections": "{}"} for idx in range(1, 251)]
-        if offset == 250:
-            return [
-                {"id": 3, "identity": "Alice", "detections": "{}"},
-                {"id": 4, "identity": "", "detections": '{"object_bboxes":[{"class_name":"person"}]}'},
-            ]
-        return []
+        captured_rows.update(kwargs)
+        return [{"id": 3, "identity": "Alice", "detections": "{}"}]
 
+    monkeypatch.setattr("frontend.services.log_service.db.count_detection_logs", fake_count_detection_logs)
     monkeypatch.setattr("frontend.services.log_service.db.get_detection_logs", fake_get_detection_logs)
 
-    rows = LogService().get_logs(log_type="face", limit=1, page=1)
+    result = LogService().query_logs(
+        log_type="Faces",
+        search="Alice",
+        rule_name="Rule A",
+        reviewed=0,
+        alarm_level=2,
+        limit=10,
+        page=2,
+    )
 
-    assert [row["id"] for row in rows] == [3]
-    assert [call["offset"] for call in calls[:2]] == [0, 250]
+    assert [row["id"] for row in result.rows] == [3]
+    assert result.total == 42
+    assert captured_count["log_type"] == "face"
+    assert captured_rows["search"] == "Alice"
+    assert captured_rows["rule_name"] == "Rule A"
+    assert captured_rows["reviewed"] == 0
+    assert captured_rows["alarm_level"] == 2
+    assert captured_rows["limit"] == 10
+    assert captured_rows["offset"] == 10

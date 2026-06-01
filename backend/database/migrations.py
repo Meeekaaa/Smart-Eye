@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 46
+CURRENT_VERSION = 48
 
 
 def apply(conn):
@@ -103,7 +103,36 @@ def apply(conn):
         _migrate_v45(conn)
     if version < 46:
         _migrate_v46(conn)
+    if version < 47:
+        _migrate_v47(conn)
+    if version < 48:
+        _migrate_v48(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v48(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("logs_auto_refresh_enabled", "0", "bool", "Auto-refresh Logs", "data"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        ("bool", "Auto-refresh Logs", "data", "logs_auto_refresh_enabled"),
+    )
+    conn.commit()
+
+
+def _migrate_v47(conn):
+    indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_detection_logs_camera_ts ON detection_logs (camera_id, timestamp)",
+        "CREATE INDEX IF NOT EXISTS idx_detection_logs_alarm_level ON detection_logs (alarm_level)",
+        "CREATE INDEX IF NOT EXISTS idx_detection_logs_reviewed ON detection_logs (reviewed)",
+        "CREATE INDEX IF NOT EXISTS idx_detection_logs_gender_norm ON detection_logs (gender_norm)",
+        "CREATE INDEX IF NOT EXISTS idx_detection_logs_has_identity ON detection_logs (has_identity)",
+    ]
+    for sql in indexes:
+        conn.execute(sql)
     conn.commit()
 
 

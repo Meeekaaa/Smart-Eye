@@ -108,7 +108,11 @@ def generate_heatmap_from_db(camera_id, date_from=None, date_to=None, width=640,
         return None
     gen = HeatmapGenerator(width=width, height=height)
     conn = db.get_conn()
-    q = "SELECT detections FROM detection_logs WHERE camera_id=?"
+    q = (
+        "SELECT detections FROM detection_logs WHERE camera_id=? "
+        "AND LOWER(COALESCE(rules_triggered, '')) NOT LIKE '%livenessfailure%' "
+        "AND LOWER(COALESCE(snapshot_path, '')) NOT LIKE '%liveness_fail%'"
+    )
     params = [camera_id]
     if date_from:
         q += " AND timestamp>=?"

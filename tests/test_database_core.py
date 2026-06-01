@@ -12,9 +12,10 @@ def test_schema_migrations_and_defaults(temp_db):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"cameras", "detection_logs", "app_settings", "rules"}.issubset(tables)
 
-    defaults = temp_db.get_setting_defaults(["theme", "liveness_check_global"])
+    defaults = temp_db.get_setting_defaults(["theme", "liveness_check_global", "logs_auto_refresh_enabled"])
     assert defaults["theme"]["value"] == "dark"
     assert defaults["liveness_check_global"]["value"] == "0"
+    assert defaults["logs_auto_refresh_enabled"]["value"] == "0"
     assert "liveness_enabled" not in temp_db.get_setting_defaults()
     assert temp_db.get_bool("live_clip_enabled", False) is True
     assert temp_db.get_int("live_clip_seconds", 0) == 5
@@ -35,6 +36,79 @@ def test_detection_log_normalizes_gender_and_identity(temp_db):
     assert row["gender_norm"] == "female"
     assert row["has_identity"] == 1
     assert json.loads(row["detections"])["gender"] == "female"
+
+
+def test_liveness_failure_logs_are_blocked_and_legacy_rows_hidden(temp_db):
+    cam_id = temp_db.add_camera("Cam 1", "debug://cam/1")
+    normal_id = temp_db.add_detection_log(
+        cam_id,
+        identity="Alice",
+        detections={"identity": "Alice", "gender": "female"},
+        rules_triggered=["Rule A"],
+        alarm_level=1,
+    )
+    blocked_id = temp_db.add_detection_log(
+        cam_id,
+        identity="Alice",
+        detections={"identity": "Alice", "liveness": 0.0, "spoof_type": "screen_presentation"},
+        rules_triggered=["LivenessFailure"],
+        alarm_level=0,
+        snapshot_path="data/snapshots/liveness_fail_20260601_120000.jpg",
+    )
+    temp_db.get_conn().execute(
+        """
+        INSERT INTO detection_logs
+            (timestamp, camera_id, identity, face_confidence, detections, gender_norm,
+             rules_triggered, alarm_level, snapshot_path, reviewed, has_identity)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "2026-06-01 12:00:00",
+            cam_id,
+            "Alice",
+            0.9,
+            json.dumps({"identity": "Alice", "liveness": 0.0, "spoof_type": "screen_presentation"}),
+            "female",
+            json.dumps(["LivenessFailure"]),
+            0,
+            "data/snapshots/liveness_fail_20260601_120000.jpg",
+            0,
+            1,
+        ),
+    )
+    temp_db.get_conn().commit()
+
+    assert normal_id is not None
+    assert blocked_id is None
+    assert temp_db.count_detection_logs() == 1
+    assert [row["id"] for row in temp_db.get_detection_logs()] == [normal_id]
+    assert temp_db.get_detection_stats()["total"] == 1
+    assert temp_db.get_snapshot_logs() == []
+
+
+def test_liveness_failure_evaluation_does_not_create_detection_log(temp_db):
+    import numpy as np
+
+    from backend.pipeline.liveness_manager import LivenessManager
+    from utils import config
+
+    temp_db.set_setting("liveness_mode", "active")
+    temp_db.set_setting("liveness_challenge_seconds", "-1")
+    temp_db.set_setting("liveness_allow_bbox_fallback", "0")
+    config.invalidate_cache()
+
+    manager = LivenessManager()
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    result = manager.evaluate(
+        999,
+        frame,
+        {"bbox": [10, 10, 40, 40], "identity": {"id": 1, "name": "Alice"}},
+        frame_idx=1,
+        objects=[],
+    )
+
+    assert result[:3] == (0.0, "landmarks_missing", False)
+    assert temp_db.count_detection_logs() == 0
 
 
 def test_seed_detection_logs_preserves_derived_columns(temp_db):
@@ -139,6 +213,105 @@ def test_snapshot_delete_clears_detection_log_link(temp_db, tmp_path):
     row = temp_db.get_conn().execute("SELECT snapshot_path FROM detection_logs WHERE id=?", (log_id,)).fetchone()
     assert cleared == 1
     assert row["snapshot_path"] == ""
+
+
+def test_detection_log_filters_count_and_reviewed(temp_db):
+    cam_id = temp_db.add_camera("Lobby", "debug://cam/1")
+    temp_db.seed_detection_logs(
+        [
+            {
+                "timestamp": "2026-01-01 00:00:00",
+                "camera_id": cam_id,
+                "identity": "Alice",
+                "detections": {"identity": "Alice", "gender": "female", "all_faces": [{"name": "Alice"}]},
+                "rules_triggered": ["Rule A"],
+                "alarm_level": 2,
+                "reviewed": 0,
+            },
+            {
+                "timestamp": "2026-01-01 00:00:01",
+                "camera_id": cam_id,
+                "identity": "",
+                "detections": {"gender": "unknown", "object_bboxes": [{"class_name": "forklift"}]},
+                "rules_triggered": ["Rule B"],
+                "alarm_level": 0,
+                "reviewed": 1,
+            },
+        ],
+        ignore_size_limit=True,
+    )
+
+    assert temp_db.count_detection_logs(search="Lobby") == 2
+    assert temp_db.count_detection_logs(search="forklift") == 1
+    assert temp_db.count_detection_logs(log_type="face") == 1
+    assert temp_db.count_detection_logs(log_type="object") == 1
+    assert temp_db.count_detection_logs(log_type="violation") == 1
+    assert temp_db.count_detection_logs(reviewed=1) == 1
+
+    rows = temp_db.get_detection_logs(search="female", log_type="face")
+    assert len(rows) == 1
+    assert rows[0]["identity"] == "Alice"
+
+
+def test_detection_log_batch_review_delete_and_cleanup_evidence(temp_db, tmp_path):
+    from frontend.services.log_service import LogService
+
+    cam_id = temp_db.add_camera("Cam 1", "debug://cam/1")
+    old_snap = tmp_path / "old.jpg"
+    new_snap = tmp_path / "new.jpg"
+    old_snap.write_bytes(b"old")
+    new_snap.write_bytes(b"new")
+    temp_db.seed_detection_logs(
+        [
+            {
+                "timestamp": "2000-01-01 00:00:00",
+                "camera_id": cam_id,
+                "identity": "Alice",
+                "snapshot_path": str(old_snap),
+            },
+            {
+                "timestamp": "2000-01-02 00:00:00",
+                "camera_id": cam_id,
+                "identity": "Bob",
+                "snapshot_path": str(new_snap),
+            },
+        ],
+        ignore_size_limit=True,
+    )
+    rows = temp_db.get_detection_logs(limit=10)
+    ids = [row["id"] for row in rows]
+
+    assert temp_db.mark_detection_logs_reviewed(ids, reviewed=1) == 2
+    assert temp_db.count_detection_logs(reviewed=1) == 2
+
+    deleted = LogService().cleanup_older_than_days(1, delete_evidence=True)
+
+    assert deleted["logs"] == 2
+    assert deleted["evidence"] == 2
+    assert not old_snap.exists()
+    assert not new_snap.exists()
+
+
+def test_log_service_exports_filtered_csv(temp_db, tmp_path):
+    from frontend.services.log_service import LogService
+
+    cam_id = temp_db.add_camera("Lobby", "debug://cam/1")
+    temp_db.add_detection_log(
+        cam_id,
+        identity="Alice",
+        detections={"gender": "female", "object_bboxes": [{"class_name": "person"}]},
+        rules_triggered=["Rule A"],
+        alarm_level=1,
+    )
+    path = tmp_path / "logs.csv"
+
+    exported = LogService().export_logs_csv(str(path), search="Alice", log_type="violation")
+
+    text = path.read_text(encoding="utf-8")
+    assert exported == 1
+    assert "camera_name" in text
+    assert "Lobby" in text
+    assert "Alice" in text
 
 
 def test_clip_filters_match_json_array_values_exactly(temp_db, tmp_path):

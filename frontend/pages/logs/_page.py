@@ -1,6 +1,8 @@
 import contextlib
 import json
 import os
+import subprocess
+import sys
 from PySide6.QtGui import QTextCharFormat, QColor
 
 from PySide6.QtCore import QDate, Qt, QTimer, QSettings, QSignalBlocker
@@ -8,9 +10,12 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
+    QApplication,
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -18,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -32,12 +38,13 @@ from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.app_theme import page_base_styles, safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.services.log_service import LogService
-from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.widgets.animated_stack import AnimatedStackedWidget
 
 from frontend.styles._colors import (
     _ACCENT,
     _ACCENT_BG_15,
+    _ACCENT_HI,
+    _ACCENT_HI_BG_06,
     _ACCENT_HI_BG_28,
     _ACCENT_HI_BG_55,
     _BG_BASE,
@@ -88,20 +95,16 @@ from frontend.ui_tokens import (
     SIZE_FIELD_W_SM,
     SIZE_HEADER_H,
     SIZE_ICON_LG,
-    SIZE_ICON_MD,
     SIZE_ROW_MD,
     SPACE_10,
-    SPACE_14,
     SPACE_20,
     SPACE_28,
     SPACE_40,
     SPACE_5,
-    SPACE_6,
     SPACE_LG,
     SPACE_MD,
     SPACE_SM,
     SPACE_XL,
-    SPACE_XS,
     SPACE_XXS,
     SPACE_XXXS,
 )
@@ -130,9 +133,14 @@ QDialog {{ background-color: {_BG_SURFACE}; }}
 """
 )
 _TITLE_STYLE = text_style(_TEXT_PRI)
-_ARROW_STYLE = text_style(_TEXT_MUTED, size=FONT_SIZE_LABEL, extra="background: transparent;")
 _BG_BASE_STYLE = f"background: {_BG_BASE};"
 _DETAIL_LABEL_STYLE = text_style(_TEXT_PRI, size=FONT_SIZE_SUBHEAD)
+_FILTER_LABEL_STYLE = text_style(
+    _TEXT_MUTED,
+    size=FONT_SIZE_CAPTION,
+    weight=FONT_WEIGHT_BOLD,
+    extra="background: transparent;",
+)
 _TABLE_HEADER_SEP_STYLE = divider_style(_BORDER_DIM)
 _TABLE_COMPACT_STYLE = f"""
 QTableWidget {{
@@ -151,6 +159,17 @@ QTableWidget::item {{
 QTableWidget::item:selected {{
     background-color: {_ACCENT_BG_15};
     color: {_TEXT_PRI};
+    border-left: none;
+    border-top: none;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
+}}
+QTableWidget::item:focus {{
+    outline: none;
+    border-left: none;
+    border-top: none;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
 }}
 QHeaderView::section {{
     background-color: {_BG_RAISED};
@@ -193,6 +212,17 @@ QTableWidget::item {{
 QTableWidget::item:selected {{
     background-color: {_ACCENT_BG_15};
     color: {_TEXT_PRI};
+    border-left: none;
+    border-top: none;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
+}}
+QTableWidget::item:focus {{
+    outline: none;
+    border-left: none;
+    border-top: none;
+    border-right: {SPACE_XXXS}px solid {_BORDER_DIM};
+    border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
 }}
 QHeaderView::section {{
     background-color: {_BG_RAISED};
@@ -211,15 +241,76 @@ QWidget#DetailsStackWrap {
     background: transparent;
 }
 """
+_DETAIL_ACTION_BTN = f"""
+QPushButton {{
+    border: none;
+    border-bottom: {SPACE_XXS}px solid transparent;
+    border-radius: 0px;
+    background: transparent;
+    color: {_TEXT_SEC};
+    font-size: {FONT_SIZE_BODY}px;
+    font-weight: {FONT_WEIGHT_NORMAL};
+    padding: 0 {SPACE_20}px;
+}}
+QPushButton:hover {{
+    color: {_TEXT_PRI};
+    background: {_ACCENT_HI_BG_06};
+    border-bottom-color: transparent;
+}}
+QPushButton:focus {{
+    color: {_TEXT_PRI};
+    background: {_ACCENT_HI_BG_06};
+    border-bottom-color: transparent;
+}}
+QPushButton:pressed {{
+    color: {_ACCENT_HI};
+    background: transparent;
+    border-bottom-color: transparent;
+    font-weight: {FONT_WEIGHT_NORMAL};
+}}
+QPushButton[inactive="true"] {{
+    color: {_TEXT_MUTED};
+    background: transparent;
+    border-bottom-color: transparent;
+}}
+QPushButton[inactive="true"]:hover {{
+    color: {_TEXT_PRI};
+    background: {_ACCENT_HI_BG_06};
+    border-bottom-color: transparent;
+}}
+QPushButton[inactive="true"]:pressed {{
+    color: {_ACCENT_HI};
+    background: transparent;
+    border-bottom-color: transparent;
+    font-weight: {FONT_WEIGHT_NORMAL};
+}}
+"""
 
 
 class LogsViewerPage(QWidget):
+    def _toolbar_field(self, label: str, widget: QWidget, width: int | None = None) -> QWidget:
+        if width is not None:
+            widget.setMinimumWidth(width)
+        widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        wrap = QWidget()
+        wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout = QVBoxLayout(wrap)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(SPACE_XXS)
+        caption = QLabel(label)
+        caption.setStyleSheet(_FILTER_LABEL_STYLE)
+        layout.addWidget(caption)
+        layout.addWidget(widget)
+        return wrap
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setStyleSheet(_STYLESHEET)
         self._settings = QSettings("SmartEye", "LogsViewer")
         self._log_service = LogService()
         self._is_active = False
+        self._filters_ready = False
+        self._last_result = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -248,15 +339,28 @@ class LogsViewerPage(QWidget):
         root.addWidget(header_w)
 
         filter_bar1 = QWidget()
-        filter_bar1.setFixedHeight(SIZE_HEADER_H)
+        filter_bar1.setFixedHeight(118)
         filter_bar1.setStyleSheet(toolbar_style(bg=_BG_SURFACE, border=_BORDER_DIM))
-        fl1 = QHBoxLayout(filter_bar1)
-        fl1.setContentsMargins(SPACE_20, SPACE_SM, SPACE_20, SPACE_SM)
-        fl1.setSpacing(0)
+        filter_wrap = QVBoxLayout(filter_bar1)
+        filter_wrap.setContentsMargins(SPACE_20, SPACE_SM, SPACE_20, SPACE_SM)
+        filter_wrap.setSpacing(SPACE_10)
+
+        filter_top = QWidget()
+        fl1 = QHBoxLayout(filter_top)
+        fl1.setContentsMargins(0, 0, 0, 0)
+        fl1.setSpacing(SPACE_10)
+        filter_wrap.addWidget(filter_top)
+
+        filter_bottom = QWidget()
+        fl2 = QHBoxLayout(filter_bottom)
+        fl2.setContentsMargins(0, 0, 0, 0)
+        fl2.setSpacing(SPACE_SM)
+        filter_wrap.addWidget(filter_bottom)
 
         self._date_from = QDateEdit()
         self._date_from.setCalendarPopup(True)
-        self._date_from.setDate(QDate.currentDate().addDays(-7))
+        saved_from = QDate.fromString(str(self._settings.value("filters/date_from", "") or ""), "yyyy-MM-dd")
+        self._date_from.setDate(saved_from if saved_from.isValid() else QDate.currentDate().addDays(-7))
         self._date_from.setDisplayFormat("MMM dd, yyyy")
         self._date_from.setFixedHeight(SIZE_CONTROL_MD)
         self._date_from.setMinimumWidth(SIZE_FIELD_W)
@@ -269,17 +373,12 @@ class LogsViewerPage(QWidget):
         _wknd_fmt.setForeground(QColor(_TEXT_SOFT))
         _cal_from.setWeekdayTextFormat(Qt.DayOfWeek.Saturday, _wknd_fmt)
         _cal_from.setWeekdayTextFormat(Qt.DayOfWeek.Sunday, _wknd_fmt)
-        fl1.addWidget(self._date_from)
-
-        _arr = QLabel("→")
-        _arr.setStyleSheet(_ARROW_STYLE)
-        _arr.setFixedWidth(SIZE_ICON_MD)
-        _arr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        fl1.addWidget(_arr)
+        fl1.addWidget(self._toolbar_field("From", self._date_from, SIZE_FIELD_W), stretch=1)
 
         self._date_to = QDateEdit()
         self._date_to.setCalendarPopup(True)
-        self._date_to.setDate(QDate.currentDate())
+        saved_to = QDate.fromString(str(self._settings.value("filters/date_to", "") or ""), "yyyy-MM-dd")
+        self._date_to.setDate(saved_to if saved_to.isValid() else QDate.currentDate())
         self._date_to.setDisplayFormat("MMM dd, yyyy")
         self._date_to.setFixedHeight(SIZE_CONTROL_MD)
         self._date_to.setMinimumWidth(SIZE_FIELD_W)
@@ -292,86 +391,88 @@ class LogsViewerPage(QWidget):
         _wknd_fmt2.setForeground(QColor(_TEXT_SOFT))
         _cal_to.setWeekdayTextFormat(Qt.DayOfWeek.Saturday, _wknd_fmt2)
         _cal_to.setWeekdayTextFormat(Qt.DayOfWeek.Sunday, _wknd_fmt2)
-        fl1.addWidget(self._date_to)
-
-        fl1.addSpacing(SPACE_14)
-        _fs1 = QWidget()
-        _fs1.setFixedSize(SPACE_XXXS, SPACE_XL)
-        _fs1.setStyleSheet(divider_style(_BORDER_DIM, SPACE_XL))
-        fl1.addWidget(_fs1)
-        fl1.addSpacing(SPACE_14)
+        fl1.addWidget(self._toolbar_field("To", self._date_to, SIZE_FIELD_W), stretch=1)
 
         self._camera_combo = QComboBox()
         self._camera_combo.addItem("All cameras", None)
         self._camera_combo.setFixedHeight(SIZE_CONTROL_MD)
-        self._camera_combo.setFixedWidth(SIZE_FIELD_W_SM)
         self._camera_combo.setStyleSheet(_FORM_COMBO)
-        fl1.addWidget(self._camera_combo)
-        fl1.addSpacing(SPACE_SM)
+        fl1.addWidget(self._toolbar_field("Camera", self._camera_combo, SIZE_FIELD_W), stretch=1)
 
         self._type_combo = QComboBox()
-        self._type_combo.addItems(["All types", "face", "object", "violation"])
+        self._type_combo.addItem("All types", None)
+        self._type_combo.addItem("Faces", "face")
+        self._type_combo.addItem("Objects", "object")
+        self._type_combo.addItem("Violations", "violation")
         self._type_combo.setFixedHeight(SIZE_CONTROL_MD)
-        self._type_combo.setFixedWidth(SIZE_FIELD_W_SM)
         self._type_combo.setStyleSheet(_FORM_COMBO)
-        fl1.addWidget(self._type_combo)
+        fl1.addWidget(self._toolbar_field("Type", self._type_combo, SIZE_FIELD_W_SM), stretch=1)
 
-        self._limit_spin = QSpinBox()
-        self._limit_spin.setRange(50, 5000)
-        self._limit_spin.setSingleStep(50)
-        self._limit_spin.setValue(int(self._settings.value("filters/limit", 500, type=int) or 500))
-        self._limit_spin.setFixedHeight(SIZE_CONTROL_MD)
-        self._limit_spin.setFixedWidth(90)
-        self._limit_spin.setStyleSheet(_FORM_INPUTS)
-        self._limit_spin.setToolTip("Maximum rows to load")
-        fl1.addSpacing(SPACE_SM)
-        fl1.addWidget(self._limit_spin)
+        self._rule_combo = QComboBox()
+        self._rule_combo.addItem("All rules", None)
+        self._rule_combo.setFixedHeight(SIZE_CONTROL_MD)
+        self._rule_combo.setStyleSheet(_FORM_COMBO)
+        fl1.addWidget(self._toolbar_field("Rule", self._rule_combo, SIZE_FIELD_W), stretch=1)
 
-        self._page_spin = QSpinBox()
-        self._page_spin.setRange(1, 9999)
-        self._page_spin.setValue(int(self._settings.value("filters/page", 1, type=int) or 1))
-        self._page_spin.setFixedHeight(SIZE_CONTROL_MD)
-        self._page_spin.setFixedWidth(76)
-        self._page_spin.setStyleSheet(_FORM_INPUTS)
-        self._page_spin.setToolTip("Result page")
-        fl1.addSpacing(SPACE_SM)
-        fl1.addWidget(self._page_spin)
+        self._reviewed_combo = QComboBox()
+        self._reviewed_combo.addItem("All review", None)
+        self._reviewed_combo.addItem("Unreviewed", 0)
+        self._reviewed_combo.addItem("Reviewed", 1)
+        self._reviewed_combo.setFixedHeight(SIZE_CONTROL_MD)
+        self._reviewed_combo.setStyleSheet(_FORM_COMBO)
+        fl1.addWidget(self._toolbar_field("Review", self._reviewed_combo, SIZE_FIELD_W), stretch=1)
 
-        fl1.addSpacing(SPACE_14)
-        _fs2 = QWidget()
-        _fs2.setFixedSize(SPACE_XXXS, SPACE_XL)
-        _fs2.setStyleSheet(divider_style(_BORDER_DIM, SPACE_XL))
-        fl1.addWidget(_fs2)
-        fl1.addSpacing(SPACE_14)
+        self._alarm_combo = QComboBox()
+        self._alarm_combo.addItem("All levels", None)
+        for level in range(1, 6):
+            self._alarm_combo.addItem(f"Level {level}+", level)
+        self._alarm_combo.setFixedHeight(SIZE_CONTROL_MD)
+        self._alarm_combo.setStyleSheet(_FORM_COMBO)
+        fl1.addWidget(self._toolbar_field("Level", self._alarm_combo, SIZE_FIELD_W_SM), stretch=1)
 
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("Search identity, class, or gender...")
+        self._search_edit.setText(str(self._settings.value("filters/search", "") or ""))
+        self._search_edit.setPlaceholderText("Search identity, rule, camera, class, or gender...")
         self._search_edit.setFixedHeight(SIZE_CONTROL_MD)
+        self._search_edit.setMinimumWidth(420)
         self._search_edit.setStyleSheet(_FORM_INPUTS)
         self._search_edit.returnPressed.connect(self._refresh)
-        fl1.addWidget(self._search_edit, stretch=1)
-
-        fl1.addSpacing(SPACE_14)
-        _fs3 = QWidget()
-        _fs3.setFixedSize(SPACE_XXXS, SPACE_XL)
-        _fs3.setStyleSheet(divider_style(_BORDER_DIM, SPACE_XL))
-        fl1.addWidget(_fs3)
-        fl1.addSpacing(SPACE_10)
+        fl2.addWidget(self._search_edit, stretch=1)
 
         apply_btn = QPushButton("Apply")
         apply_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
         apply_btn.setStyleSheet(_PRIMARY_BTN)
         apply_btn.clicked.connect(self._refresh)
-        fl1.addWidget(apply_btn)
+        fl2.addWidget(apply_btn)
 
-        fl1.addSpacing(SPACE_6)
+        clear_btn = QPushButton("Clear")
+        clear_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        clear_btn.setStyleSheet(_SECONDARY_BTN)
+        clear_btn.clicked.connect(self._clear_filters)
+        fl2.addWidget(clear_btn)
+
+        _fs3 = QWidget()
+        _fs3.setFixedSize(SPACE_XXXS, SPACE_XL)
+        _fs3.setStyleSheet(divider_style(_BORDER_DIM, SPACE_XL))
+        fl2.addWidget(_fs3)
+
+        export_btn = QPushButton("Export")
+        export_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        export_btn.setStyleSheet(_SECONDARY_BTN)
+        export_btn.clicked.connect(self._export_logs)
+        fl2.addWidget(export_btn)
+
         cleanup_btn = QPushButton("Cleanup")
         cleanup_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
         cleanup_btn.setStyleSheet(_SECONDARY_BTN)
         cleanup_btn.clicked.connect(self._cleanup_logs)
-        fl1.addWidget(cleanup_btn)
+        fl2.addWidget(cleanup_btn)
 
-        fl1.addSpacing(SPACE_6)
+        _fs_delete = QWidget()
+        _fs_delete.setFixedSize(SPACE_XXXS, SPACE_XL)
+        _fs_delete.setStyleSheet(divider_style(_BORDER_DIM, SPACE_XL))
+        fl2.addWidget(_fs_delete)
+
         _DANGER_BTN_CONFIRM = f"""
             QPushButton {{
                 border: {SPACE_XXXS}px solid {_DANGER_GRAD_START};
@@ -393,26 +494,8 @@ class LogsViewerPage(QWidget):
         del_toolbar_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
         del_toolbar_btn.set_button_styles(_DANGER_BTN, _DANGER_BTN_CONFIRM)
         del_toolbar_btn.set_confirm_callback(self._delete_selected)
-        fl1.addWidget(del_toolbar_btn)
+        fl2.addWidget(del_toolbar_btn)
 
-        fl1.addSpacing(SPACE_14)
-        _fs4 = QWidget()
-        _fs4.setFixedSize(SPACE_XXXS, SPACE_XL)
-        _fs4.setStyleSheet(divider_style(_BORDER_DIM, SPACE_XL))
-        fl1.addWidget(_fs4)
-        fl1.addSpacing(SPACE_MD)
-
-        auto_lbl = QLabel("Auto-Refresh")
-        auto_lbl.setStyleSheet(
-            f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_CAPTION}px; font-weight: {FONT_WEIGHT_BOLD}; letter-spacing: 0.{SPACE_XS}px;"
-        )
-        fl1.addWidget(auto_lbl)
-        fl1.addSpacing(SPACE_SM)
-
-        self._auto_refresh = ToggleSwitch()
-        self._auto_refresh.setToolTip("Auto-refresh every 3 seconds")
-        self._auto_refresh.toggled.connect(self._toggle_auto_refresh)
-        fl1.addWidget(self._auto_refresh)
         root.addWidget(filter_bar1)
 
         content_w = QWidget()
@@ -447,6 +530,42 @@ class LogsViewerPage(QWidget):
             f"color: {_TEXT_SEC}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_NORMAL}; background: transparent;"
         )
         tbl_hdr_l.addWidget(self._count_label)
+
+        rows_lbl = QLabel("Rows")
+        rows_lbl.setStyleSheet(_FILTER_LABEL_STYLE)
+        tbl_hdr_l.addWidget(rows_lbl)
+        self._limit_spin = QSpinBox()
+        self._limit_spin.setRange(50, 1000)
+        self._limit_spin.setSingleStep(50)
+        self._limit_spin.setValue(min(1000, int(self._settings.value("filters/limit", 500, type=int) or 500)))
+        self._limit_spin.setFixedHeight(SIZE_CONTROL_MD)
+        self._limit_spin.setFixedWidth(90)
+        self._limit_spin.setStyleSheet(_FORM_INPUTS)
+        self._limit_spin.setToolTip("Maximum rows to load")
+        tbl_hdr_l.addWidget(self._limit_spin)
+
+        page_lbl = QLabel("Page")
+        page_lbl.setStyleSheet(_FILTER_LABEL_STYLE)
+        tbl_hdr_l.addWidget(page_lbl)
+        self._page_spin = QSpinBox()
+        self._page_spin.setRange(1, 9999)
+        self._page_spin.setValue(int(self._settings.value("filters/page", 1, type=int) or 1))
+        self._page_spin.setFixedHeight(SIZE_CONTROL_MD)
+        self._page_spin.setFixedWidth(76)
+        self._page_spin.setStyleSheet(_FORM_INPUTS)
+        self._page_spin.setToolTip("Result page")
+        tbl_hdr_l.addWidget(self._page_spin)
+
+        self._prev_page_btn = QPushButton("Previous")
+        self._prev_page_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        self._prev_page_btn.setStyleSheet(_SECONDARY_BTN)
+        self._prev_page_btn.clicked.connect(lambda: self._move_page(-1))
+        tbl_hdr_l.addWidget(self._prev_page_btn)
+        self._next_page_btn = QPushButton("Next")
+        self._next_page_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        self._next_page_btn.setStyleSheet(_SECONDARY_BTN)
+        self._next_page_btn.clicked.connect(lambda: self._move_page(1))
+        tbl_hdr_l.addWidget(self._next_page_btn)
         table_vbox.addWidget(tbl_hdr_w)
         tbl_sep = QFrame()
         tbl_sep.setFixedHeight(SPACE_XXXS)
@@ -456,14 +575,16 @@ class LogsViewerPage(QWidget):
         self._table = QTableWidget()
         self._table.viewport().setAutoFillBackground(False)
         self._table.viewport().setStyleSheet("background: transparent;")
-        self._table.setColumnCount(7)
-        self._table.setHorizontalHeaderLabels(["Time", "Camera", "Identity", "Gender", "Type", "Violation", "Snapshot"])
+        self._table.setColumnCount(8)
+        self._table.setHorizontalHeaderLabels(["Time", "Camera", "Identity", "Gender", "Type", "Level", "Reviewed", "Snapshot"])
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(5, 100)
+        self._table.setColumnWidth(5, 90)
         hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        self._table.setColumnWidth(6, 240)
+        self._table.setColumnWidth(6, 110)
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(7, 220)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.verticalHeader().setVisible(False)
@@ -501,6 +622,33 @@ class LogsViewerPage(QWidget):
         det_title.setStyleSheet(section_kicker_style())
         det_hdr_l.addWidget(det_title)
         det_hdr_l.addStretch()
+        self._mark_reviewed_btn = QPushButton("Reviewed")
+        self._mark_reviewed_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        self._mark_reviewed_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mark_reviewed_btn.setStyleSheet(_DETAIL_ACTION_BTN)
+        self._mark_reviewed_btn.clicked.connect(lambda: self._mark_selected_reviewed(True))
+        det_hdr_l.addWidget(self._mark_reviewed_btn)
+
+        self._mark_unreviewed_btn = QPushButton("Open")
+        self._mark_unreviewed_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        self._mark_unreviewed_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._mark_unreviewed_btn.setStyleSheet(_DETAIL_ACTION_BTN)
+        self._mark_unreviewed_btn.clicked.connect(lambda: self._mark_selected_reviewed(False))
+        det_hdr_l.addWidget(self._mark_unreviewed_btn)
+
+        self._open_snapshot_btn = QPushButton("Snapshot")
+        self._open_snapshot_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        self._open_snapshot_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._open_snapshot_btn.setStyleSheet(_DETAIL_ACTION_BTN)
+        self._open_snapshot_btn.clicked.connect(self._open_selected_snapshot)
+        det_hdr_l.addWidget(self._open_snapshot_btn)
+
+        self._copy_json_btn = QPushButton("Copy JSON")
+        self._copy_json_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
+        self._copy_json_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._copy_json_btn.setStyleSheet(_DETAIL_ACTION_BTN)
+        self._copy_json_btn.clicked.connect(self._copy_selected_json)
+        det_hdr_l.addWidget(self._copy_json_btn)
         detail_vbox.addWidget(det_hdr_w)
         det_sep = QFrame()
         det_sep.setFixedHeight(SPACE_XXXS)
@@ -566,17 +714,57 @@ class LogsViewerPage(QWidget):
         self._logs_data = []
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._refresh)
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.timeout.connect(self._refresh)
 
-        saved_auto = bool(self._settings.value("auto_refresh/enabled", False, type=bool))
-        with QSignalBlocker(self._auto_refresh):
-            self._auto_refresh.setChecked(saved_auto)
         saved_tab = int(self._settings.value("details/current_tab", 0, type=int) or 0)
         self._set_details_tab(0 if saved_tab not in (0, 1) else saved_tab)
+        self._set_combo_by_data(self._type_combo, self._settings.value("filters/type", None))
+        self._set_combo_by_data(self._reviewed_combo, self._settings.value("filters/reviewed", None))
+        self._set_combo_by_data(self._alarm_combo, self._settings.value("filters/alarm_level", None))
+        self._set_detail_actions_enabled(False)
+        self._connect_filter_signals()
+        self._filters_ready = True
+
+    @staticmethod
+    def _combo_data_key(value):
+        if value in (None, "", "None"):
+            return None
+        text = str(value)
+        if text.isdigit():
+            return int(text)
+        return text
+
+    def _set_combo_by_data(self, combo: QComboBox, value) -> None:
+        key = self._combo_data_key(value)
+        for idx in range(combo.count()):
+            if combo.itemData(idx) == key:
+                combo.setCurrentIndex(idx)
+                return
+        combo.setCurrentIndex(0)
+
+    def _connect_filter_signals(self) -> None:
+        for combo in (self._camera_combo, self._type_combo, self._rule_combo, self._reviewed_combo, self._alarm_combo):
+            combo.currentIndexChanged.connect(self._on_filter_changed)
+        self._date_from.dateChanged.connect(self._on_filter_changed)
+        self._date_to.dateChanged.connect(self._on_filter_changed)
+        self._limit_spin.valueChanged.connect(self._on_filter_changed)
+        self._search_edit.textChanged.connect(self._on_filter_changed)
+        self._page_spin.valueChanged.connect(self._refresh)
+
+    def _on_filter_changed(self) -> None:
+        if not self._filters_ready:
+            return
+        with QSignalBlocker(self._page_spin):
+            self._page_spin.setValue(1)
+        self._filter_timer.start(250)
 
     def on_activated(self):
         self._is_active = True
         self._refresh_cameras()
-        if self._auto_refresh.isChecked():
+        self._refresh_rules()
+        if db.get_bool("logs_auto_refresh_enabled", False):
             self._auto_timer.start(3000)
         self._refresh()
 
@@ -585,17 +773,28 @@ class LogsViewerPage(QWidget):
         self._auto_timer.stop()
 
     def _refresh_cameras(self):
-        self._camera_combo.clear()
-        self._camera_combo.addItem("All cameras", None)
-        for cam in db.get_cameras():
-            self._camera_combo.addItem(cam["name"], cam["id"])
+        selected = self._camera_combo.currentData()
+        if selected is None:
+            selected = self._combo_data_key(self._settings.value("filters/camera_id", None))
+        with QSignalBlocker(self._camera_combo):
+            self._camera_combo.clear()
+            self._camera_combo.addItem("All cameras", None)
+            for cam in db.get_cameras():
+                self._camera_combo.addItem(cam["name"], cam["id"])
+            self._set_combo_by_data(self._camera_combo, selected)
 
-    def _toggle_auto_refresh(self, checked):
-        self._settings.setValue("auto_refresh/enabled", bool(checked))
-        if checked and self._is_active:
-            self._auto_timer.start(3000)
-        else:
-            self._auto_timer.stop()
+    def _refresh_rules(self):
+        selected = self._rule_combo.currentData()
+        if selected is None:
+            selected = self._settings.value("filters/rule_name", None)
+        with QSignalBlocker(self._rule_combo):
+            self._rule_combo.clear()
+            self._rule_combo.addItem("All rules", None)
+            for rule in db.get_rules():
+                name = str(rule.get("name") or "").strip()
+                if name:
+                    self._rule_combo.addItem(name, name)
+            self._set_combo_by_data(self._rule_combo, selected)
 
     def _set_details_tab(self, index: int):
         idx = 0 if index not in (0, 1) else index
@@ -615,60 +814,98 @@ class LogsViewerPage(QWidget):
         date_from = date_range.start.strftime("%Y-%m-%d 00:00:00")
         date_to = date_range.end.strftime("%Y-%m-%d 23:59:59")
         camera_id = self._camera_combo.currentData()
-        log_type = self._type_combo.currentText()
+        log_type = self._type_combo.currentData()
+        rule_name = self._rule_combo.currentData()
+        reviewed = self._reviewed_combo.currentData()
+        alarm_level = self._alarm_combo.currentData()
         search = self._search_edit.text().strip()
         limit = self._limit_spin.value()
         page = self._page_spin.value()
+        self._settings.setValue("filters/date_from", date_range.start.strftime("%Y-%m-%d"))
+        self._settings.setValue("filters/date_to", date_range.end.strftime("%Y-%m-%d"))
+        self._settings.setValue("filters/camera_id", "" if camera_id is None else camera_id)
+        self._settings.setValue("filters/type", "" if log_type is None else log_type)
+        self._settings.setValue("filters/rule_name", "" if rule_name is None else rule_name)
+        self._settings.setValue("filters/reviewed", "" if reviewed is None else reviewed)
+        self._settings.setValue("filters/alarm_level", "" if alarm_level is None else alarm_level)
+        self._settings.setValue("filters/search", search)
         self._settings.setValue("filters/limit", limit)
         self._settings.setValue("filters/page", page)
 
-        logs = self._log_service.get_logs(
+        result = self._log_service.query_logs(
             camera_id=camera_id,
             date_from=date_from,
             date_to=date_to,
             log_type=log_type,
             search=search,
+            rule_name=rule_name,
+            alarm_level=alarm_level,
+            reviewed=reviewed,
             limit=limit,
             page=page,
         )
+        if result.total and page > result.total_pages:
+            with QSignalBlocker(self._page_spin):
+                self._page_spin.setValue(result.total_pages)
+            self._refresh()
+            return
+
+        self._last_result = result
+        logs = result.rows
         self._logs_data = logs
-        self._table.setRowCount(len(logs))
+        with QSignalBlocker(self._page_spin):
+            self._page_spin.setRange(1, result.total_pages)
+            self._page_spin.setValue(min(page, result.total_pages))
+        page = self._page_spin.value()
+        self._prev_page_btn.setEnabled(page > 1)
+        self._next_page_btn.setEnabled(result.has_next)
+
+        with QSignalBlocker(self._table):
+            self._table.setRowCount(len(logs))
+            for i, log in enumerate(logs):
+                ts = log.get("timestamp", "")
+                if "T" in ts:
+                    ts = ts.replace("T", "  ").split(".")[0]
+                self._table.setItem(i, 0, self._cell(ts))
+
+                cam_name = log.get("camera_name")
+                if not cam_name:
+                    cam_name = str(log.get("camera_id", ""))
+                self._table.setItem(i, 1, self._cell(cam_name))
+                self._table.setItem(i, 2, self._cell(log.get("identity") or "-"))
+                detections = self._log_service.parse_detections(log)
+                gender = str(log.get("gender_norm") or (detections or {}).get("gender") or "unknown").title()
+                self._table.setItem(i, 3, self._cell(gender))
+                self._table.setItem(i, 4, self._cell(self._display_log_type(log)))
+
+                alarm_value = int(log.get("alarm_level") or 0)
+                level_item = QTableWidgetItem(f"Level {alarm_value}" if alarm_value > 0 else "None")
+                level_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                level_item.setForeground(QColor(_DANGER if alarm_value > 0 else _TEXT_MUTED))
+                self._table.setItem(i, 5, level_item)
+
+                reviewed_item = self._cell("Reviewed" if int(log.get("reviewed") or 0) else "Open")
+                reviewed_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                reviewed_item.setForeground(QColor(_TEXT_SEC if int(log.get("reviewed") or 0) else _ACCENT))
+                self._table.setItem(i, 6, reviewed_item)
+
+                snap = log.get("snapshot_path", "") or ""
+                snap_display = os.path.basename(snap) if snap else "-"
+                snap_item = self._cell(snap_display)
+                if snap:
+                    snap_item.setToolTip(snap)
+                self._table.setItem(i, 7, snap_item)
 
         has_rows = len(logs) > 0
         self._table.setVisible(has_rows)
         self._empty_label.setVisible(not has_rows)
 
-        for i, log in enumerate(logs):
-            ts = log.get("timestamp", "")
-            if "T" in ts:
-                ts = ts.replace("T", "  ").split(".")[0]
-            self._table.setItem(i, 0, self._cell(ts))
-
-            cam_name = log.get("camera_name")
-            if not cam_name:
-                cam = db.get_camera(log.get("camera_id"))
-                cam_name = cam["name"] if cam else str(log.get("camera_id", ""))
-            self._table.setItem(i, 1, self._cell(cam_name))
-            self._table.setItem(i, 2, self._cell(log.get("identity", "-")))
-            detections = self._log_service.parse_detections(log)
-            gender = str((detections or {}).get("gender") or "unknown").title()
-            self._table.setItem(i, 3, self._cell(gender))
-            self._table.setItem(i, 4, self._cell(self._display_log_type(log)))
-
-            is_violation = (log.get("alarm_level", 0) or 0) > 0
-            viol_item = QTableWidgetItem("* YES" if is_violation else "NO")
-            viol_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            viol_item.setForeground(QColor(_DANGER if is_violation else _TEXT_MUTED))
-            self._table.setItem(i, 5, viol_item)
-
-            snap = log.get("snapshot_path", "") or ""
-            snap_display = os.path.basename(snap) if snap else "-"
-            snap_item = self._cell(snap_display)
-            if snap:
-                snap_item.setToolTip(snap)
-            self._table.setItem(i, 6, snap_item)
-
-        self._count_label.setText(f"{len(logs)} log{'s' if len(logs) != 1 else ''} · page {page}")
+        if result.total:
+            first = (page - 1) * limit + 1
+            last = first + len(logs) - 1
+            self._count_label.setText(f"{first}-{last} of {result.total} logs - page {page}/{result.total_pages}")
+        else:
+            self._count_label.setText("0 logs")
         if selected_id is not None:
             for idx, log in enumerate(logs):
                 if log.get("id") == selected_id:
@@ -676,11 +913,20 @@ class LogsViewerPage(QWidget):
                     self._on_row_selected(idx, 0, -1, -1)
                     break
             else:
-                self._detail_table.setRowCount(0)
-                self._detail_text.clear()
-        elif not logs:
+                if logs:
+                    self._table.selectRow(0)
+                    self._on_row_selected(0, 0, -1, -1)
+                else:
+                    self._detail_table.setRowCount(0)
+                    self._detail_text.clear()
+                    self._set_detail_actions_enabled(False)
+        elif logs:
+            self._table.selectRow(0)
+            self._on_row_selected(0, 0, -1, -1)
+        else:
             self._detail_table.setRowCount(0)
             self._detail_text.clear()
+            self._set_detail_actions_enabled(False)
 
     def _selected_log_id(self):
         row = self._table.currentRow()
@@ -690,12 +936,12 @@ class LogsViewerPage(QWidget):
 
     def _display_log_type(self, log: dict) -> str:
         if (log.get("alarm_level", 0) or 0) > 0:
-            return "violation"
+            return "Violation"
         if self._log_service.matches_type(log, "object"):
-            return "object"
+            return "Object"
         if self._log_service.matches_type(log, "face"):
-            return "face"
-        return "detection"
+            return "Face"
+        return "Detection"
 
     @staticmethod
     def _cell(text: str) -> QTableWidgetItem:
@@ -707,6 +953,7 @@ class LogsViewerPage(QWidget):
         if row < 0 or row >= len(self._logs_data):
             self._detail_table.setRowCount(0)
             self._detail_text.clear()
+            self._set_detail_actions_enabled(False)
             return
         log = self._logs_data[row]
         details = dict(log)
@@ -716,6 +963,7 @@ class LogsViewerPage(QWidget):
                 details["detections"] = json.loads(detections)
         self._populate_detail_table(details)
         self._detail_text.setPlainText(json.dumps(details, indent=2, default=str))
+        self._set_detail_actions_enabled(True)
 
     def _populate_detail_table(self, details: dict):
         rows: list[tuple[str, str]] = []
@@ -786,16 +1034,15 @@ class LogsViewerPage(QWidget):
                 return
             rows.append((label, summary))
 
-        cam_name = "-"
-        with contextlib.suppress(Exception):
-            cam = db.get_camera(details.get("camera_id"))
-            if cam and cam.get("name"):
-                cam_name = str(cam.get("name"))
+        cam_name = str(details.get("camera_name") or details.get("camera_id") or "-")
 
         _field("Log ID", details.get("id"))
         _field("Time", details.get("timestamp"))
         _field("Camera", cam_name)
         _field("Identity", details.get("identity"))
+        _field("Alarm Level", details.get("alarm_level") or 0)
+        _field("Reviewed", "Yes" if int(details.get("reviewed") or 0) else "No")
+        _field("Rules", details.get("rules_triggered") or "-")
         _field("Violation", "Yes" if (details.get("alarm_level", 0) or 0) > 0 else "No")
         _field("Snapshot", os.path.basename(str(details.get("snapshot_path") or "")) or "-")
 
@@ -805,7 +1052,18 @@ class LogsViewerPage(QWidget):
                 _field(f"Detection {clean}", value)
 
         for key, value in details.items():
-            if key in {"id", "timestamp", "camera_id", "identity", "alarm_level", "snapshot_path", "detections"}:
+            if key in {
+                "id",
+                "timestamp",
+                "camera_id",
+                "camera_name",
+                "identity",
+                "alarm_level",
+                "reviewed",
+                "rules_triggered",
+                "snapshot_path",
+                "detections",
+            }:
                 continue
             clean = str(key).replace("_", " ").strip().title()
             _field(clean, value)
@@ -819,12 +1077,152 @@ class LogsViewerPage(QWidget):
             self._detail_table.setItem(idx, 0, field_item)
             self._detail_table.setItem(idx, 1, value_item)
 
-    def _delete_selected(self):
-        rows = {item.row() for item in self._table.selectedIndexes()}
-        if not rows:
+    def _selected_logs(self) -> list[dict]:
+        rows = {idx.row() for idx in self._table.selectedIndexes()}
+        return [self._logs_data[row] for row in sorted(rows) if 0 <= row < len(self._logs_data)]
+
+    def _selected_log_ids(self) -> list[int]:
+        return [int(log["id"]) for log in self._selected_logs() if log.get("id") is not None]
+
+    def _current_log(self) -> dict | None:
+        row = self._table.currentRow()
+        if 0 <= row < len(self._logs_data):
+            return self._logs_data[row]
+        return None
+
+    @staticmethod
+    def _set_detail_action_inactive(button: QPushButton, inactive: bool) -> None:
+        button.setEnabled(True)
+        button.setProperty("inactive", bool(inactive))
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
+
+    def _set_detail_actions_enabled(self, enabled: bool) -> None:
+        for btn in (
+            self._mark_reviewed_btn,
+            self._mark_unreviewed_btn,
+            self._copy_json_btn,
+        ):
+            self._set_detail_action_inactive(btn, not enabled)
+        log = self._current_log() if enabled else None
+        snapshot_path = str((log or {}).get("snapshot_path") or "")
+        self._set_detail_action_inactive(self._open_snapshot_btn, not bool(snapshot_path and os.path.isfile(snapshot_path)))
+
+    def _mark_selected_reviewed(self, reviewed: bool) -> None:
+        ids = self._selected_log_ids()
+        if not ids:
             return
-        log_ids = [self._logs_data[row].get("id") for row in sorted(rows) if row < len(self._logs_data)]
-        self._log_service.delete_logs([log_id for log_id in log_ids if log_id])
+        self._log_service.mark_reviewed(ids, reviewed=reviewed)
+        self._refresh()
+
+    def _open_selected_snapshot(self) -> None:
+        log = self._current_log()
+        path = str((log or {}).get("snapshot_path") or "")
+        if not path or not os.path.isfile(path):
+            QMessageBox.information(self, "Snapshot", "Snapshot file is missing.")
+            self._set_detail_actions_enabled(log is not None)
+            return
+        try:
+            self._open_path_with_system(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Snapshot", f"Could not open snapshot: {exc}")
+
+    def _copy_selected_json(self) -> None:
+        text = self._detail_text.toPlainText().strip()
+        if text:
+            QApplication.clipboard().setText(text)
+
+    @staticmethod
+    def _open_path_with_system(path: str) -> None:
+        if sys.platform.startswith("win") and hasattr(os, "startfile"):
+            os.startfile(path)  # type: ignore[attr-defined]
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+            return
+        subprocess.Popen(["xdg-open", path])
+
+    def _move_page(self, delta: int) -> None:
+        new_page = max(1, self._page_spin.value() + int(delta))
+        if self._last_result is not None:
+            new_page = min(new_page, self._last_result.total_pages)
+        if new_page != self._page_spin.value():
+            self._page_spin.setValue(new_page)
+
+    def _clear_filters(self) -> None:
+        self._filters_ready = False
+        blockers = [
+            QSignalBlocker(self._date_from),
+            QSignalBlocker(self._date_to),
+            QSignalBlocker(self._camera_combo),
+            QSignalBlocker(self._type_combo),
+            QSignalBlocker(self._rule_combo),
+            QSignalBlocker(self._reviewed_combo),
+            QSignalBlocker(self._alarm_combo),
+            QSignalBlocker(self._search_edit),
+            QSignalBlocker(self._page_spin),
+        ]
+        try:
+            self._date_from.setDate(QDate.currentDate().addDays(-7))
+            self._date_to.setDate(QDate.currentDate())
+            self._camera_combo.setCurrentIndex(0)
+            self._type_combo.setCurrentIndex(0)
+            self._rule_combo.setCurrentIndex(0)
+            self._reviewed_combo.setCurrentIndex(0)
+            self._alarm_combo.setCurrentIndex(0)
+            self._search_edit.clear()
+            self._page_spin.setValue(1)
+        finally:
+            del blockers
+        self._filters_ready = True
+        self._refresh()
+
+    def _export_logs(self) -> None:
+        date_range = normalize_date_range(qdate_to_date(self._date_from.date()), qdate_to_date(self._date_to.date()))
+        default_name = f"smart_eye_logs_{date_range.start.strftime('%Y%m%d')}_{date_range.end.strftime('%Y%m%d')}.csv"
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Logs",
+            default_name,
+            "CSV Files (*.csv)",
+        )
+        if not filepath:
+            return
+        if not filepath.lower().endswith(".csv"):
+            filepath = f"{filepath}.csv"
+        count = self._log_service.export_logs_csv(
+            filepath,
+            camera_id=self._camera_combo.currentData(),
+            date_from=date_range.start.strftime("%Y-%m-%d 00:00:00"),
+            date_to=date_range.end.strftime("%Y-%m-%d 23:59:59"),
+            log_type=self._type_combo.currentData(),
+            search=self._search_edit.text().strip(),
+            rule_name=self._rule_combo.currentData(),
+            reviewed=self._reviewed_combo.currentData(),
+            alarm_level=self._alarm_combo.currentData(),
+        )
+        QMessageBox.information(self, "Export Logs", f"Exported {count} log(s).")
+
+    def _delete_selected(self):
+        log_ids = self._selected_log_ids()
+        if not log_ids:
+            return
+        delete_evidence = False
+        if any((log.get("snapshot_path") or "") for log in self._selected_logs()):
+            choice = QMessageBox.question(
+                self,
+                "Delete Evidence",
+                "Delete linked snapshot files too?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.No,
+            )
+            if choice == QMessageBox.StandardButton.Cancel:
+                return
+            delete_evidence = choice == QMessageBox.StandardButton.Yes
+        result = self._log_service.delete_logs(log_ids, delete_evidence=delete_evidence)
+        if result.get("evidence"):
+            QMessageBox.information(self, "Delete Logs", f"Deleted {result['logs']} log(s) and {result['evidence']} snapshot file(s).")
         self._refresh()
 
     def _cleanup_logs(self):
@@ -848,6 +1246,10 @@ class LogsViewerPage(QWidget):
         days_spin.setStyleSheet(_FORM_INPUTS)
         layout.addWidget(days_spin)
 
+        evidence_check = QCheckBox("Delete linked snapshot files")
+        evidence_check.setStyleSheet(_DETAIL_LABEL_STYLE)
+        layout.addWidget(evidence_check)
+
         btn_row = QHBoxLayout()
         btn_row.setSpacing(SPACE_10)
         btn_row.addStretch()
@@ -856,8 +1258,14 @@ class LogsViewerPage(QWidget):
         delete_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
 
         def do_delete():
-            count = self._log_service.cleanup_older_than_days(days_spin.value())
-            QMessageBox.information(dlg, "Cleanup", f"Deleted {count} old log(s).")
+            result = self._log_service.cleanup_older_than_days(
+                days_spin.value(),
+                delete_evidence=evidence_check.isChecked(),
+            )
+            message = f"Deleted {result['logs']} old log(s)."
+            if result.get("evidence"):
+                message += f"\nDeleted {result['evidence']} snapshot file(s)."
+            QMessageBox.information(dlg, "Cleanup", message)
             dlg.accept()
             self._refresh()
 

@@ -2,14 +2,11 @@ import logging
 import math
 import time
 import uuid
-from pathlib import Path
 
 import cv2
 
 from backend.models.passive_liveness_model import get_passive_liveness_model
-from backend.repository import db
 from utils import config
-from utils.image_utils import save_snapshot
 
 _log = logging.getLogger(__name__)
 
@@ -169,9 +166,11 @@ class LivenessManager:
         except Exception:
             self._failure_hold = 2.0
         try:
-            self._failure_log_cooldown = max(1.0, float(config.get("liveness_failure_log_cooldown_sec", 20.0) or 20.0))
+            self._failure_record_cooldown = max(
+                1.0, float(config.get("liveness_failure_log_cooldown_sec", 20.0) or 20.0)
+            )
         except Exception:
-            self._failure_log_cooldown = 20.0
+            self._failure_record_cooldown = 20.0
         try:
             self._allow_bbox_fallback = _as_bool(config.get("liveness_allow_bbox_fallback", False), False)
         except Exception:
@@ -294,7 +293,7 @@ class LivenessManager:
             "max_center": center_x,
             "passed_at": 0.0,
             "failed_at": 0.0,
-            "fail_logged": False,
+            "failure_recorded": False,
             "passive_started": now,
             "passive_observations": 0,
             "passive_scores": [],
@@ -314,7 +313,7 @@ class LivenessManager:
                 "min_center": center_x,
                 "max_center": center_x,
                 "failed_at": 0.0,
-                "fail_logged": False,
+                "failure_recorded": False,
                 "passive_started": now,
                 "passive_observations": 0,
                 "passive_scores": [],
@@ -322,61 +321,18 @@ class LivenessManager:
         )
 
     def _record_failure(self, camera_id, frame, face, bbox, tr: dict, fail_type: str, yaw: float | None):
-        if tr.get("fail_logged"):
+        if tr.get("failure_recorded"):
             return
         now = time.time()
         try:
-            last_at = float(tr.get("last_fail_log_at", 0.0) or 0.0)
+            last_at = float(tr.get("last_failure_recorded_at", 0.0) or 0.0)
         except Exception:
             last_at = 0.0
-        if tr.get("last_fail_log_type") == fail_type and now - last_at < self._failure_log_cooldown:
+        if tr.get("last_failure_type") == fail_type and now - last_at < self._failure_record_cooldown:
             return
-        tr["fail_logged"] = True
-        tr["last_fail_log_at"] = now
-        tr["last_fail_log_type"] = fail_type
-        try:
-            can_persist = db.can_persist_events()
-        except Exception:
-            can_persist = False
-        if not can_persist:
-            _log.warning("Skipping liveness failure log because database size limit is reached")
-            return
-        try:
-            snap_dir = Path("data") / "snapshots"
-            snap_path = save_snapshot(frame, snap_dir, prefix="liveness_fail")
-        except Exception:
-            snap_path = ""
-
-        identity = _identity_text(face)
-        det_payload = {
-            "identity": identity or "unknown",
-            "gender": face.get("gender", "unknown"),
-            "bbox": bbox,
-            "liveness": 0.0,
-            "spoof_type": fail_type,
-            "liveness_yaw": yaw,
-        }
-        try:
-            safe_camera_id = camera_id
-            if safe_camera_id is not None:
-                try:
-                    if not db.get_camera(safe_camera_id):
-                        safe_camera_id = None
-                except Exception:
-                    safe_camera_id = None
-            db.add_detection_log(
-                camera_id=safe_camera_id,
-                identity=identity,
-                face_confidence=float(face.get("_confidence") or face.get("confidence") or 0.0),
-                detections=det_payload,
-                rules_triggered=["LivenessFailure"],
-                # Liveness failures are face-verification events, not rule
-                # alarms. Keep the log/snapshot without driving popup alerts.
-                alarm_level=0,
-                snapshot_path=snap_path,
-            )
-        except Exception:
-            _log.exception("Failed to log liveness failure")
+        tr["failure_recorded"] = True
+        tr["last_failure_recorded_at"] = now
+        tr["last_failure_type"] = fail_type
 
     def _update_bbox_fallback(self, tr: dict, bbox, now: float) -> bool:
         center_x = _bbox_center_x(bbox)
@@ -568,7 +524,7 @@ class LivenessManager:
             if len(recent) >= self._passive_min_frames and avg_score >= self._passive_threshold:
                 tr["passed_at"] = now
                 tr["failed_at"] = 0.0
-                tr["fail_logged"] = False
+                tr["failure_recorded"] = False
                 return 1.0, None, False, 0.0
 
             elapsed = now - float(tr.get("passive_started", now) or now)
@@ -586,7 +542,7 @@ class LivenessManager:
             if elapsed >= self._passive_window_sec and int(tr.get("passive_observations", 0)) >= self._passive_min_frames:
                 tr["passed_at"] = now
                 tr["failed_at"] = 0.0
-                tr["fail_logged"] = False
+                tr["failure_recorded"] = False
                 return 1.0, None, False, 0.0
             return 0.0, None, True, max(0.0, self._passive_window_sec - elapsed)
 
@@ -679,7 +635,7 @@ class LivenessManager:
             if passed:
                 tr["passed_at"] = now
                 tr["failed_at"] = 0.0
-                tr["fail_logged"] = False
+                tr["failure_recorded"] = False
                 _log.info("Liveness passed cam=%s tid=%s identity=%s", camera_id, tid, _identity_text(face))
                 return 1.0, None, False, 0.0
 
@@ -690,7 +646,7 @@ class LivenessManager:
             tr["failed_at"] = now
             tr["fail_type"] = fail_type
             self._record_failure(camera_id, frame, face, bbox, tr, fail_type, yaw)
-            _log.info("Liveness failed cam=%s tid=%s type=%s identity=%s", camera_id, tid, fail_type, _identity_text(face))
+            _log.debug("Liveness rejected cam=%s tid=%s type=%s identity=%s", camera_id, tid, fail_type, _identity_text(face))
             return 0.0, fail_type, False, 0.0
         except Exception:
             _log.exception("LivenessManager.evaluate failed")
