@@ -49,3 +49,15 @@ def test_disabling_playback_autoclip_does_not_clear_rolling_buffer():
     thread.set_record_enabled(False)
 
     assert len(thread._frame_buffer) == 1
+
+
+def test_playback_clip_buffer_downscales_and_respects_memory_limit():
+    thread = PlaybackThread("missing.mp4")
+    thread._clip_buffer_max_dim = 4
+    thread._clip_max_buffer_bytes = 4 * 4 * 3 * 2
+
+    for idx in range(4):
+        thread._append_clip_frame(idx, np.zeros((12, 8, 3), dtype=np.uint8))
+
+    assert all(max(frame.shape[:2]) <= 4 for _idx, frame in thread._frame_buffer)
+    assert thread._frame_buffer_bytes <= thread._clip_max_buffer_bytes

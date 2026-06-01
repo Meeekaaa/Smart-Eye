@@ -14,7 +14,6 @@ from PySide6.QtCore import QMutex, QThread, Signal
 from backend.pipeline.detector_manager import get_manager
 from backend.pipeline.inference_utils import build_state
 from backend.repository import db
-from backend.services.pipeline_service import PipelineService
 
 _AUTO_CLIP_SECONDS = 5
 _AUTO_CLIP_LATENCY_SLACK_SECONDS = 5
@@ -23,8 +22,6 @@ _AUTO_CLIP_LATENCY_SLACK_SECONDS = 5
 class PlaybackThread(QThread):
     frame_ready = Signal(int, np.ndarray, dict)
     playback_finished = Signal(int)
-    position_changed = Signal(int, int, int)
-    detection_event = Signal(int, int, dict)
     clip_saved = Signal(str)
     clip_failed = Signal(str)
 
@@ -39,12 +36,14 @@ class PlaybackThread(QThread):
         self._seek_frame = -1
         self._cap = None
         self._total_frames = 0
-        self._detection_events = []
         self._plugins_enabled = False
         self._face_detection_enabled = True
         self._disabled_object_classes: set[str] = set()
         self._record_enabled = False
         self._frame_buffer: collections.deque = collections.deque()
+        self._frame_buffer_bytes = 0
+        self._clip_max_buffer_bytes = 128 * 1024 * 1024
+        self._clip_buffer_max_dim = 640
         self._video_fps_actual: float = 30.0
         try:
             self._infer_target_fps = float(db.get_float("playback_infer_target_fps", 12.0) or 12.0)
@@ -68,6 +67,12 @@ class PlaybackThread(QThread):
             self._disabled_object_classes = {str(v).strip().lower() for v in parsed if str(v).strip()}
         except Exception:
             self._disabled_object_classes = set()
+        try:
+            self._clip_max_buffer_bytes = max(8, int(db.get_int("live_clip_max_buffer_mb", 128) or 128)) * 1024 * 1024
+            self._clip_buffer_max_dim = max(160, int(db.get_int("live_clip_buffer_max_dim", 640) or 640))
+        except Exception:
+            self._clip_max_buffer_bytes = 128 * 1024 * 1024
+            self._clip_buffer_max_dim = 640
 
     @property
     def camera_id(self):
@@ -96,9 +101,10 @@ class PlaybackThread(QThread):
             infer_stride,
         )
         buf_max = max(1, int(video_fps * (_AUTO_CLIP_SECONDS + _AUTO_CLIP_LATENCY_SLACK_SECONDS)))
-        detector = get_manager()
-        pipeline = PipelineService(self._camera_id)
         infer_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"play-infer-cam{self._camera_id}")
+        clip_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"play-clip-cam{self._camera_id}")
+        clip_futures: set[Future] = set()
+        detector = get_manager()
         pending_future: Future | None = None
         last_detect_state: dict = {"triggered_rules": [], "frame_index": 0}
         last_detect_frame_idx = -1
@@ -111,8 +117,8 @@ class PlaybackThread(QThread):
                 self._camera_id,
                 run_plugins=self._plugins_enabled,
                 run_faces=self._face_detection_enabled,
-                identify_faces=False,
-                lightweight=True,
+                identify_faces=self._face_detection_enabled,
+                lightweight=not self._face_detection_enabled,
             )
             if not self._plugins_enabled:
                 detection_results["objects"] = []
@@ -131,41 +137,38 @@ class PlaybackThread(QThread):
             )
             return infer_idx, frame, w, h, primary, triggered
 
-        def _handle_triggers(primary_state, triggered, frame, frame_idx, video_fps, fw, fh):
+        def _handle_triggers(primary_state, triggered, frame_idx, video_fps):
             nonlocal _clip_cooldown
+            if not triggered:
+                primary_state["triggered_rules"] = []
+                primary_state["active_violations"] = []
+                return
 
-            def _on_event(trig, state):
-                nonlocal _clip_cooldown
-                logging.getLogger(__name__).info(
-                    "Playback: rule trigger cam_id=%s frame=%s rules=%s record=%s buffer=%s cooldown=%s",
-                    self._camera_id,
-                    frame_idx,
-                    [r.get("name") for r in trig],
-                    self._record_enabled,
-                    len(self._frame_buffer),
-                    _clip_cooldown,
-                )
-                event = {
-                    "frame": frame_idx,
-                    "rules": [r["name"] for r in trig],
-                    "state": state,
-                }
-                self._detection_events.append(event)
-                self.detection_event.emit(self._camera_id, frame_idx, state)
-                if self._record_enabled and self._frame_buffer and _clip_cooldown <= 0:
-                    if self._save_clip(video_fps, state, [r.get("name") for r in trig], event_frame_idx=frame_idx):
-                        _clip_cooldown = int(video_fps * _AUTO_CLIP_SECONDS)
-
-            primary_state["_triggered"] = triggered
-            pipeline.handle_result(
-                primary_state,
-                frame,
-                infer_fw=fw,
-                infer_fh=fh,
-                enable_inbox=False,
-                enable_heatmap=False,
-                on_detection_event=_on_event,
+            rule_names = [str(r.get("name") or "Rule") for r in triggered]
+            primary_state["triggered_rules"] = rule_names
+            primary_state["active_violations"] = [
+                {"rule": name, "rule_name": name, "camera_id": self._camera_id}
+                for name in rule_names
+            ]
+            logging.getLogger(__name__).info(
+                "Playback: rule trigger cam_id=%s frame=%s rules=%s record=%s buffer=%s cooldown=%s",
+                self._camera_id,
+                frame_idx,
+                rule_names,
+                self._record_enabled,
+                len(self._frame_buffer),
+                _clip_cooldown,
             )
+            if self._record_enabled and self._frame_buffer and _clip_cooldown <= 0:
+                if self._save_clip_async(
+                    clip_executor,
+                    clip_futures,
+                    video_fps,
+                    primary_state,
+                    rule_names,
+                    event_frame_idx=frame_idx,
+                ):
+                    _clip_cooldown = int(video_fps * _AUTO_CLIP_SECONDS)
 
         while self._running and not self.isInterruptionRequested():
             force_read = False
@@ -190,9 +193,10 @@ class PlaybackThread(QThread):
                 break
 
             if self._record_enabled and not self._paused:
-                self._frame_buffer.append((frame_idx, frame.copy()))
+                self._append_clip_frame(frame_idx, frame)
                 while len(self._frame_buffer) > buf_max:
-                    self._frame_buffer.popleft()
+                    _idx, old_frame = self._frame_buffer.popleft()
+                    self._frame_buffer_bytes -= int(getattr(old_frame, "nbytes", 0) or 0)
 
             h, w = frame.shape[:2]
 
@@ -201,10 +205,10 @@ class PlaybackThread(QThread):
                     det_idx, det_frame, det_w, det_h, det_state, det_triggered = pending_future.result(timeout=0)
                     if det_idx >= last_detect_frame_idx:
                         if self._record_enabled:
-                            _handle_triggers(det_state, det_triggered, det_frame, det_idx, video_fps, det_w, det_h)
-                            det_state["triggered_rules"] = [r["name"] for r in det_triggered]
+                            _handle_triggers(det_state, det_triggered, det_idx, video_fps)
                         else:
                             det_state["triggered_rules"] = []
+                            det_state["active_violations"] = []
                         det_state["frame_index"] = det_idx
                         last_detect_state = det_state
                         last_detect_frame_idx = det_idx
@@ -265,7 +269,6 @@ class PlaybackThread(QThread):
             if _clip_cooldown > 0:
                 _clip_cooldown -= 1
 
-            self.position_changed.emit(self._camera_id, frame_idx, self._total_frames)
             self.frame_ready.emit(self._camera_id, frame, primary_state)
             if not self._paused:
                 frame_idx += 1
@@ -282,10 +285,31 @@ class PlaybackThread(QThread):
         if pending_future is not None and not pending_future.done():
             pending_future.cancel()
         infer_executor.shutdown(wait=False)
+        clip_executor.shutdown(wait=True)
         with contextlib.suppress(Exception):
             detector.clear_camera_state(self._camera_id)
         if self._cap:
             self._cap.release()
+
+    def _prepare_clip_frame(self, frame: np.ndarray) -> np.ndarray:
+        max_dim = int(self._clip_buffer_max_dim or 0)
+        if max_dim <= 0:
+            return frame.copy()
+        h, w = frame.shape[:2]
+        longest = max(h, w)
+        if longest <= max_dim:
+            return frame.copy()
+        scale = max_dim / float(longest)
+        return cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+
+    def _append_clip_frame(self, frame_idx: int, frame: np.ndarray) -> None:
+        clip_frame = self._prepare_clip_frame(frame)
+        frame_bytes = int(getattr(clip_frame, "nbytes", 0) or 0)
+        self._frame_buffer.append((int(frame_idx), clip_frame))
+        self._frame_buffer_bytes += frame_bytes
+        while self._frame_buffer and self._frame_buffer_bytes > self._clip_max_buffer_bytes:
+            _idx, old_frame = self._frame_buffer.popleft()
+            self._frame_buffer_bytes -= int(getattr(old_frame, "nbytes", 0) or 0)
 
     def _buffered_clip_frames(self, fps: float, event_frame_idx: int | None = None) -> list[np.ndarray]:
         entries = list(self._frame_buffer)
@@ -318,13 +342,46 @@ class PlaybackThread(QThread):
         rules: list[str] | None = None,
         event_frame_idx: int | None = None,
     ) -> str | None:
+        frames = self._buffered_clip_frames(fps, event_frame_idx=event_frame_idx)
+        return self._write_clip(frames, fps, state=state, rules=rules)
+
+    def _save_clip_async(
+        self,
+        executor: ThreadPoolExecutor,
+        futures: set[Future],
+        fps: float,
+        state: dict | None = None,
+        rules: list[str] | None = None,
+        event_frame_idx: int | None = None,
+    ) -> bool:
+        frames = self._buffered_clip_frames(fps, event_frame_idx=event_frame_idx)
+        if not frames:
+            logging.getLogger(__name__).warning("Playback: no buffered frames; skipping clip save")
+            return False
+        future = executor.submit(self._write_clip, frames, fps, state, rules)
+        futures.add(future)
+
+        def _done(done_future: Future) -> None:
+            futures.discard(done_future)
+            with contextlib.suppress(Exception):
+                done_future.result()
+
+        future.add_done_callback(_done)
+        return True
+
+    def _write_clip(
+        self,
+        frames: list[np.ndarray],
+        fps: float,
+        state: dict | None = None,
+        rules: list[str] | None = None,
+    ) -> str | None:
         try:
             if not db.can_persist_events():
                 logging.getLogger(__name__).warning("Playback clip skipped: database size limit is reached")
                 return None
             os.makedirs("data/clips", exist_ok=True)
-            fname = os.path.join("data", "clips", f"clip_{int(time.time())}.mp4")
-            frames = self._buffered_clip_frames(fps, event_frame_idx=event_frame_idx)
+            fname = os.path.join("data", "clips", f"clip_{time.time_ns()}.mp4")
             if not frames:
                 logging.getLogger(__name__).warning("Playback: no buffered frames; skipping clip save")
                 return None
@@ -333,11 +390,11 @@ class PlaybackThread(QThread):
             writer = cv2.VideoWriter(fname, fourcc, fps, (w, h))
             if not writer.isOpened():
                 raise RuntimeError("VideoWriter failed to open (mp4v)")
-            for f in frames:
-                writer.write(f)
-            writer.release()
-            self.clip_saved.emit(fname)
-            logging.getLogger(__name__).info("Playback: clip saved %s", fname)
+            try:
+                for f in frames:
+                    writer.write(f)
+            finally:
+                writer.release()
             try:
                 det = (state or {}).get("detections", {}) or {}
                 obj_types = [
@@ -356,6 +413,8 @@ class PlaybackThread(QThread):
                 )
             except Exception:
                 logging.getLogger(__name__).exception("Playback: failed to record clip metadata")
+            self.clip_saved.emit(fname)
+            logging.getLogger(__name__).info("Playback: clip saved %s", fname)
             return fname
         except Exception as e:
             msg = f"Clip save failed: {e}"

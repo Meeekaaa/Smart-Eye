@@ -1565,6 +1565,29 @@ def delete_clip(path: str):
     _write_execute("DELETE FROM clips WHERE path=?", (path,))
 
 
+def clear_snapshot_path(path: str) -> int:
+    if not path:
+        return 0
+    cur = _write_execute(
+        "UPDATE detection_logs SET snapshot_path='' WHERE snapshot_path=?",
+        (path,),
+    )
+    return int(cur.rowcount or 0)
+
+
+def get_snapshot_logs(limit: int | None = 150):
+    q = """SELECT dl.id, dl.timestamp, dl.camera_id, dl.snapshot_path, dl.rules_triggered, c.name as camera_name
+           FROM detection_logs dl
+           LEFT JOIN cameras c ON dl.camera_id=c.id
+           WHERE dl.snapshot_path IS NOT NULL AND dl.snapshot_path!=''
+           ORDER BY dl.timestamp DESC"""
+    params = []
+    if limit is not None:
+        q += " LIMIT ?"
+        params.append(max(1, int(limit or 150)))
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
+
+
 def get_clips(
     camera_id: int | None = None,
     ts_from: int | None = None,
@@ -1573,6 +1596,7 @@ def get_clips(
     object_type: str | None = None,
     rule_triggered: str | None = None,
     limit: int | None = 500,
+    offset: int | None = 0,
 ):
     q = "SELECT * FROM clips WHERE 1=1"
     params = []
@@ -1589,15 +1613,18 @@ def get_clips(
         q += " AND face_label LIKE ?"
         params.append(f"%{face_label}%")
     if rule_triggered:
-        q += " AND rules_triggered LIKE ?"
-        params.append(f"%{rule_triggered}%")
+        q += " AND json_valid(rules_triggered) AND EXISTS (SELECT 1 FROM json_each(clips.rules_triggered) WHERE value=?)"
+        params.append(rule_triggered)
     if object_type:
-        q += " AND object_types LIKE ?"
-        params.append(f"%{object_type}%")
+        q += " AND json_valid(object_types) AND EXISTS (SELECT 1 FROM json_each(clips.object_types) WHERE value=?)"
+        params.append(object_type)
     q += " ORDER BY ts DESC"
     if limit is not None:
         q += " LIMIT ?"
         params.append(max(1, int(limit or 500)))
+        if offset:
+            q += " OFFSET ?"
+            params.append(max(0, int(offset or 0)))
     rows = _conn.execute(q, params).fetchall()
     return [dict(r) for r in rows]
 

@@ -128,6 +128,31 @@ def test_report_export_summary_honors_rule_filter(monkeypatch, tmp_path):
     assert captured["rule_name"] == "Rule A"
 
 
+def test_snapshot_delete_clears_detection_log_link(temp_db, tmp_path):
+    cam_id = temp_db.add_camera("Cam 1", "debug://cam/1")
+    snap = tmp_path / "snap.jpg"
+    snap.write_bytes(b"img")
+    log_id = temp_db.add_detection_log(cam_id, detections={}, rules_triggered=["Rule A"], alarm_level=1, snapshot_path=str(snap))
+
+    cleared = temp_db.clear_snapshot_path(str(snap))
+
+    row = temp_db.get_conn().execute("SELECT snapshot_path FROM detection_logs WHERE id=?", (log_id,)).fetchone()
+    assert cleared == 1
+    assert row["snapshot_path"] == ""
+
+
+def test_clip_filters_match_json_array_values_exactly(temp_db, tmp_path):
+    clip_a = tmp_path / "a.mp4"
+    clip_b = tmp_path / "b.mp4"
+    clip_a.write_bytes(b"a")
+    clip_b.write_bytes(b"b")
+    temp_db.add_clip(str(clip_a), "playback", None, 10, None, ["Rule A"], ["person"])
+    temp_db.add_clip(str(clip_b), "playback", None, 20, None, ["Rule AB"], ["person-extra"])
+
+    assert [row["path"] for row in temp_db.get_clips(rule_triggered="Rule A")] == [str(clip_a)]
+    assert [row["path"] for row in temp_db.get_clips(object_type="person")] == [str(clip_a)]
+
+
 def test_settings_import_rejects_unknown_keys(temp_db):
     try:
         temp_db.import_settings_json({"unknown_setting": {"value": "1", "type": "bool"}})
