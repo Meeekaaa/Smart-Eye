@@ -148,12 +148,19 @@ _SETTING_DEFAULTS = {
     "theme_json_path": {"value": "", "type": "string", "label": "Theme JSON Path", "section": "general"},
     "log_retention_days": {"value": "90", "type": "int", "label": "Log Retention (days)", "section": "data"},
     "logs_auto_refresh_enabled": {"value": "0", "type": "bool", "label": "Auto-refresh Logs", "section": "data"},
+    "runtime_metrics_enabled": {"value": "1", "type": "bool", "label": "Record Runtime Metrics", "section": "reports"},
     "auto_start_cameras": {"value": "0", "type": "bool", "label": "Auto-start cameras on launch", "section": "general"},
     "minimize_to_tray": {"value": "0", "type": "bool", "label": "Minimize to tray", "section": "general"},
     "popup_notifications_enabled": {"value": "1", "type": "bool", "label": "Popup notifications", "section": "notifications"},
     "debug_mode_enabled": {"value": "0", "type": "bool", "label": "Debugging mode", "section": "general"},
     "experimental_mode_enabled": {"value": "0", "type": "bool", "label": "Experimental settings", "section": "general"},
     "liveness_check_global": {"value": "0", "type": "bool", "label": "Require Liveness Globally", "section": "detection"},
+    "liveness_skip_presentation_for_stream_sources": {
+        "value": "1",
+        "type": "bool",
+        "label": "Skip Presentation Block For Stream Sources",
+        "section": "detection",
+    },
 }
 _DYNAMIC_SETTING_PATTERNS = (
     re.compile(r"^camera_\d+_max_faces$"),

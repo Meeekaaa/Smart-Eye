@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 48
+CURRENT_VERSION = 50
 
 
 def apply(conn):
@@ -107,7 +107,57 @@ def apply(conn):
         _migrate_v47(conn)
     if version < 48:
         _migrate_v48(conn)
+    if version < 49:
+        _migrate_v49(conn)
+    if version < 50:
+        _migrate_v50(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v50(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        (
+            "runtime_metrics_enabled",
+            "1",
+            "bool",
+            "Record Runtime Metrics",
+            "reports",
+        ),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        (
+            "bool",
+            "Record Runtime Metrics",
+            "reports",
+            "runtime_metrics_enabled",
+        ),
+    )
+    conn.commit()
+
+
+def _migrate_v49(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        (
+            "liveness_skip_presentation_for_stream_sources",
+            "1",
+            "bool",
+            "Skip Presentation Block For Stream Sources",
+            "detection",
+        ),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        (
+            "bool",
+            "Skip Presentation Block For Stream Sources",
+            "detection",
+            "liveness_skip_presentation_for_stream_sources",
+        ),
+    )
     conn.commit()
 
 

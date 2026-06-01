@@ -560,7 +560,7 @@ class LivenessManager:
         self._record_failure(camera_id, frame, face, bbox, tr, fail_type, None)
         return 0.0, fail_type, False, 0.0
 
-    def evaluate(self, camera_id, frame, face, frame_idx, objects=None):
+    def evaluate(self, camera_id, frame, face, frame_idx, objects=None, *, block_presentation: bool = True):
         """
         Returns: (liveness_float, fail_type_or_None, pending_bool, seconds_left)
         """
@@ -588,7 +588,7 @@ class LivenessManager:
                     return 0.0, tr.get("fail_type", "turn_failed"), False, 0.0
                 self._reset_challenge(tr, bbox, now)
 
-            if self._looks_like_presentation_attack(frame, bbox, objects or []):
+            if block_presentation and self._looks_like_presentation_attack(frame, bbox, objects or []):
                 tr["passed_at"] = 0.0
                 tr["failed_at"] = now
                 tr["fail_type"] = "screen_presentation"

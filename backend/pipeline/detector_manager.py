@@ -16,6 +16,7 @@ from backend.pipeline.liveness_manager import LivenessManager
 logger = logging.getLogger(__name__)
 
 _MAX_INFER_DIM = 768
+_DEMO_VIDEO_EXTENSIONS = (".mp4", ".avi", ".mkv", ".mov", ".wmv", ".webm", ".m4v")
 
 
 def _scale_frame(frame, max_dim=_MAX_INFER_DIM):
@@ -98,6 +99,17 @@ def _box_intersection_area(a, b):
 
 def _class_name_key(value):
     return str(value or "").strip().lower().replace("_", " ").replace("-", " ")
+
+
+def _is_demo_stream_source(source, *, http_as_live: bool = False) -> bool:
+    text = str(source or "").strip().lower()
+    if not text:
+        return False
+    if "twitch.tv/" in text or "www.twitch.tv/" in text:
+        return True
+    if http_as_live and text.startswith(("http://", "https://")):
+        return True
+    return text.endswith(_DEMO_VIDEO_EXTENSIONS)
 
 
 def _face_linked_to_person_box(person_box, face_box):
@@ -1335,8 +1347,23 @@ class DetectorManager:
             existing_trackers = list(state.trackers)
         self._identify_faces(camera_id, faces_for_identify, existing_trackers, aggressive_mode, max_identify, frame_for_liveness, frame_idx)
 
+    def _skip_presentation_block_for_camera(self, camera_id) -> bool:
+        try:
+            if not db.get_bool("liveness_skip_presentation_for_stream_sources", True):
+                return False
+            cam = self._get_camera_settings_cached(camera_id)
+            if not cam:
+                return False
+            return _is_demo_stream_source(
+                cam.get("source"),
+                http_as_live=db.get_bool("http_stream_as_live", False),
+            )
+        except Exception:
+            return False
+
     def _evaluate_liveness_for_frame(self, camera_id, faces, objects, frame_for_liveness, frame_idx):
         try:
+            skip_presentation_block = self._skip_presentation_block_for_camera(camera_id)
             for f in faces:
                 try:
                     liveness_required = config.liveness_global()
@@ -1352,7 +1379,11 @@ class DetectorManager:
                         block_presentations = config.get("liveness_block_screen_presentations", True)
                         if isinstance(block_presentations, str):
                             block_presentations = block_presentations.strip().lower() in ("1", "true", "yes", "on")
-                        if block_presentations and self._liveness.detect_presentation_attack(frame_for_liveness, f, objects=objects):
+                        if (
+                            block_presentations
+                            and not skip_presentation_block
+                            and self._liveness.detect_presentation_attack(frame_for_liveness, f, objects=objects)
+                        ):
                             f["liveness"] = 0.0
                             f["_spoof_type"] = "screen_presentation"
                             f.pop("_liveness_pending", None)
@@ -1364,7 +1395,12 @@ class DetectorManager:
                 if liveness_required and self._liveness is not None:
                     try:
                         lval, spoof, pending, seconds_left = self._liveness.evaluate(
-                            camera_id, frame_for_liveness, f, frame_idx, objects=objects
+                            camera_id,
+                            frame_for_liveness,
+                            f,
+                            frame_idx,
+                            objects=objects,
+                            block_presentation=not skip_presentation_block,
                         )
                         f["liveness"] = lval
                         if spoof:

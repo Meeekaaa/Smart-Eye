@@ -20,6 +20,8 @@ def test_schema_migrations_and_defaults(temp_db):
     assert temp_db.get_bool("live_clip_enabled", False) is True
     assert temp_db.get_int("live_clip_seconds", 0) == 5
     assert temp_db.get_bool("playback_record_enabled", False) is True
+    assert temp_db.get_bool("liveness_skip_presentation_for_stream_sources", False) is True
+    assert temp_db.get_bool("runtime_metrics_enabled", False) is True
 
 
 def test_detection_log_normalizes_gender_and_identity(temp_db):
@@ -109,6 +111,39 @@ def test_liveness_failure_evaluation_does_not_create_detection_log(temp_db):
 
     assert result[:3] == (0.0, "landmarks_missing", False)
     assert temp_db.count_detection_logs() == 0
+
+
+def test_liveness_presentation_block_can_be_skipped_for_stream_sources(temp_db):
+    import numpy as np
+
+    from backend.pipeline.detector_manager import _is_demo_stream_source
+    from backend.pipeline.liveness_manager import LivenessManager
+    from utils import config
+
+    temp_db.set_setting("liveness_mode", "active")
+    temp_db.set_setting("liveness_challenge_seconds", "-1")
+    config.invalidate_cache()
+
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    face = {"bbox": [20, 20, 40, 40], "identity": {"id": 1, "name": "Alice"}}
+    objects = [{"class_name": "screen", "bbox": [0, 0, 80, 80]}]
+
+    assert _is_demo_stream_source("https://www.twitch.tv/example")
+    assert _is_demo_stream_source("demo.mp4")
+    assert not _is_demo_stream_source("0")
+
+    blocked = LivenessManager().evaluate(100, frame, face, frame_idx=1, objects=objects)
+    skipped = LivenessManager().evaluate(
+        101,
+        frame,
+        face,
+        frame_idx=1,
+        objects=objects,
+        block_presentation=False,
+    )
+
+    assert blocked[:3] == (0.0, "screen_presentation", False)
+    assert skipped[1] != "screen_presentation"
 
 
 def test_seed_detection_logs_preserves_derived_columns(temp_db):

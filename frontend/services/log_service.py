@@ -6,6 +6,7 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import ClassVar
 
 from backend.repository import db
 
@@ -27,7 +28,7 @@ class LogQueryResult:
 
 
 class LogService:
-    TYPE_LABELS = {
+    TYPE_LABELS: ClassVar[dict[str, str]] = {
         "all": "All types",
         "face": "Faces",
         "object": "Objects",
