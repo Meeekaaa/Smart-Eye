@@ -169,7 +169,7 @@ _SPEED_LABEL_STYLE = text_style(_TEXT_MUTED, size=FONT_SIZE_CAPTION, weight=FONT
 _RETIRED_PLAYBACK_THREADS: list[PlaybackThread] = []
 _RETIRED_CLIP_INDEX_WORKERS: set[QThread] = set()
 _RETIRED_SNAPSHOT_INDEX_WORKERS: set[QThread] = set()
-_PLAYBACK_SESSION_IDS = itertools.count(-1, -1)
+_PLAYBACK_SESSION_IDS = itertools.count(-1000, -1)
 
 
 class _ClipIndexWorker(QThread):

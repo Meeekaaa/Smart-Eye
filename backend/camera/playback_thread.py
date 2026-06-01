@@ -101,6 +101,7 @@ class PlaybackThread(QThread):
             infer_stride,
         )
         buf_max = max(1, int(video_fps * (_AUTO_CLIP_SECONDS + _AUTO_CLIP_LATENCY_SLACK_SECONDS)))
+        face_recognition_stride = max(1, int(round(video_fps / max(1.0, min(self._infer_target_fps, 5.0)))))
         infer_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"play-infer-cam{self._camera_id}")
         clip_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"play-clip-cam{self._camera_id}")
         clip_futures: set[Future] = set()
@@ -117,13 +118,15 @@ class PlaybackThread(QThread):
                 self._camera_id,
                 run_plugins=self._plugins_enabled,
                 run_faces=self._face_detection_enabled,
-                identify_faces=self._face_detection_enabled,
-                lightweight=not self._face_detection_enabled,
+                identify_faces=False,
+                lightweight=True,
             )
             if not self._plugins_enabled:
                 detection_results["objects"] = []
             if not self._face_detection_enabled:
                 detection_results["faces"] = []
+            elif detection_results.get("faces"):
+                detector.identify_faces_lightweight(self._camera_id, detection_results["faces"])
             if self._disabled_object_classes:
                 detection_results["objects"] = [
                     o
@@ -240,8 +243,8 @@ class PlaybackThread(QThread):
                 and (
                     frame_idx
                     % (
-                        max(1, int(round(video_fps / max(1.0, min(self._infer_target_fps, 8.0)))))
-                        if self._face_detection_enabled and not self._plugins_enabled
+                        max(infer_stride, face_recognition_stride)
+                        if self._face_detection_enabled
                         else infer_stride
                     )
                     == 0
