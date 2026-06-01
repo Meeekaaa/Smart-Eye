@@ -97,6 +97,34 @@ def test_analytics_summary_honors_rule_filter(temp_db):
     assert summary["violations"] == 1
 
 
+def test_report_export_summary_honors_rule_filter(monkeypatch, tmp_path):
+    from backend.analytics import report_generator
+
+    captured = {}
+
+    def fake_get_summary(*args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "total_detections": 1,
+            "violations": 1,
+            "compliant": 0,
+            "compliance_rate": 0,
+        }
+
+    monkeypatch.setattr(report_generator.stats_engine, "is_dummy_analytics_enabled", lambda: False)
+    monkeypatch.setattr(report_generator.stats_engine, "get_summary", fake_get_summary)
+    monkeypatch.setattr(report_generator.stats_engine, "get_compliance_trend", lambda **kwargs: [])
+    monkeypatch.setattr(report_generator.stats_engine, "get_hourly_violation_chart", lambda *args, **kwargs: [])
+    monkeypatch.setattr(report_generator.stats_engine, "get_camera_activity_data", lambda *args, **kwargs: [])
+    monkeypatch.setattr(report_generator.stats_engine, "get_person_violations", lambda *args, **kwargs: [])
+    monkeypatch.setattr(report_generator.stats_engine, "get_gender_violations", lambda **kwargs: [])
+    monkeypatch.setattr(report_generator, "_build_heatmap_image", lambda **kwargs: None)
+
+    report_generator.generate_report(str(tmp_path / "report.pdf"), rule_name="Rule A")
+
+    assert captured["rule_name"] == "Rule A"
+
+
 def test_settings_import_rejects_unknown_keys(temp_db):
     try:
         temp_db.import_settings_json({"unknown_setting": {"value": "1", "type": "bool"}})

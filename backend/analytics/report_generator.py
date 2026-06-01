@@ -202,7 +202,14 @@ def generate_report(
         elements.append(Paragraph("Report mode: Synthetic debug analytics data is enabled.", subtitle_style))
     elements.append(Spacer(1, 20))
 
-    summary = stats_engine.get_summary(date_from, date_to, camera_id, min_alarm_level=min_alarm_level, gender=gender)
+    summary = stats_engine.get_summary(
+        date_from,
+        date_to,
+        camera_id,
+        rule_name=rule_name,
+        min_alarm_level=min_alarm_level,
+        gender=gender,
+    )
     elements.append(Paragraph("Summary", section_style))
     summary_data = [
         ["Metric", "Value"],
