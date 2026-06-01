@@ -250,7 +250,7 @@ class PlaybackPage(QWidget):
         self._clip_filter_face = None
         self._clip_filter_from = None
         self._clip_filter_to = None
-        self._clip_filters_dialog: QDialog | None = None
+        self._clip_filters_panel: QWidget | None = None
         self._filters_btn: QToolButton | None = None
         self._face_detect_toggle: ToggleSwitch | None = None
         self._class_filters_btn: QPushButton | None = None
@@ -274,6 +274,7 @@ class PlaybackPage(QWidget):
         self._clip_page = 0
         self._clip_page_size = 100
         self._clip_has_next_page = False
+        self._clip_paging_widget: QWidget | None = None
         self._clip_prev_btn: QPushButton | None = None
         self._clip_next_btn: QPushButton | None = None
         self._clip_page_label: QLabel | None = None
@@ -557,12 +558,25 @@ QSlider::handle:horizontal {{
         self._filters_btn.setIconSize(QSize(SIZE_ICON_10, SIZE_ICON_10))
         self._filters_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._filters_btn.setStyleSheet(filter_tool_button_style())
-        self._filters_btn.clicked.connect(self._open_clip_filters_dialog)
+        self._filters_btn.setCheckable(True)
+        self._filters_btn.clicked.connect(self._toggle_clip_filters_panel)
         clips_hdr_l.addWidget(self._filters_btn)
         ccv.addWidget(clips_hdr_w)
 
-        self._ensure_clip_filters_dialog()
+        self._clip_filters_panel = self._build_clip_filters_panel()
+        self._clip_filters_panel.setVisible(False)
+        ccv.addWidget(self._clip_filters_panel)
         self._load_clip_filters()
+
+        self._clip_empty_label = QLabel("No clips saved yet")
+        self._clip_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._clip_empty_label.setWordWrap(True)
+        self._clip_empty_label.setStyleSheet(
+            f"color: {_TEXT_MUTED}; font-size: {FONT_SIZE_LABEL}px; font-weight: {FONT_WEIGHT_BOLD};"
+            f" padding: {SPACE_XL}px {SPACE_LG}px; background: transparent;"
+        )
+        self._clip_empty_label.hide()
+        ccv.addWidget(self._clip_empty_label, stretch=1)
 
         self._clips_list = QListWidget()
         self._clips_list.setObjectName("clips_list")
@@ -578,23 +592,27 @@ QSlider::handle:horizontal {{
         ccv.addWidget(self._clips_list, stretch=1)
         self._filters_ready = True
 
-        clip_paging = QHBoxLayout()
+        self._clip_paging_widget = QWidget()
+        self._clip_paging_widget.setStyleSheet("background: transparent;")
+        clip_paging = QHBoxLayout(self._clip_paging_widget)
         clip_paging.setContentsMargins(SPACE_LG, SPACE_SM, SPACE_LG, 0)
         clip_paging.setSpacing(SPACE_SM)
         self._clip_prev_btn = QPushButton("Previous")
         self._clip_prev_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._clip_prev_btn.setStyleSheet(_SECONDARY_BTN)
         self._clip_prev_btn.clicked.connect(self._previous_clip_page)
-        clip_paging.addWidget(self._clip_prev_btn)
+        clip_paging.addWidget(self._clip_prev_btn, stretch=1)
         self._clip_page_label = QLabel("Page 1")
         self._clip_page_label.setStyleSheet(muted_label_style(size=FONT_SIZE_MICRO))
-        clip_paging.addWidget(self._clip_page_label, stretch=1)
+        self._clip_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        clip_paging.addWidget(self._clip_page_label)
         self._clip_next_btn = QPushButton("Next")
         self._clip_next_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._clip_next_btn.setStyleSheet(_SECONDARY_BTN)
         self._clip_next_btn.clicked.connect(self._next_clip_page)
-        clip_paging.addWidget(self._clip_next_btn)
-        ccv.addLayout(clip_paging)
+        clip_paging.addWidget(self._clip_next_btn, stretch=1)
+        self._clip_paging_widget.hide()
+        ccv.addWidget(self._clip_paging_widget)
 
         self._clip_status = QLabel("")
         self._clip_status.setStyleSheet(
@@ -1254,23 +1272,21 @@ QSlider::handle:horizontal {{
             self._class_filter_dialog.move(pos.x(), pos.y() + SPACE_6)
         self._class_filter_dialog.show()
 
-    def _ensure_clip_filters_dialog(self) -> None:
-        if self._clip_filters_dialog is not None:
-            return
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Clip Filters")
-        apply_popup_theme(dlg)
-        dlg.setModal(False)
-        dlg.setFixedWidth(420)
-
-        fl = QVBoxLayout(dlg)
-        fl.setContentsMargins(SPACE_LG, SPACE_MD, SPACE_LG, SPACE_MD)
+    def _build_clip_filters_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("ClipFiltersPanel")
+        panel.setStyleSheet(
+            f"""
+            QWidget#ClipFiltersPanel {{
+                background: {_BG_OVERLAY};
+                border-top: {SPACE_XXXS}px solid {_BORDER_DIM};
+                border-bottom: {SPACE_XXXS}px solid {_BORDER_DIM};
+            }}
+            """
+        )
+        fl = QVBoxLayout(panel)
+        fl.setContentsMargins(SPACE_LG, SPACE_SM, SPACE_MD, SPACE_SM)
         fl.setSpacing(SPACE_SM)
-
-        hint = QLabel("Use one or more filters to narrow saved clips.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(muted_label_style(size=FONT_SIZE_CAPTION))
-        fl.addWidget(hint)
 
         self._clip_filter_camera = QComboBox()
         self._clip_filter_camera.setFixedHeight(SIZE_CONTROL_MD)
@@ -1318,21 +1334,12 @@ QSlider::handle:horizontal {{
         fl.addLayout(date_row)
 
         row2 = QHBoxLayout()
-        row2.addStretch()
+        row2.setSpacing(SPACE_SM)
         clear_btn = QPushButton("Clear")
         clear_btn.setFixedHeight(SIZE_CONTROL_MD)
         clear_btn.setStyleSheet(_SECONDARY_BTN)
-        row2.addWidget(clear_btn)
+        row2.addWidget(clear_btn, stretch=1)
         fl.addLayout(row2)
-
-        action_row = QHBoxLayout()
-        action_row.addStretch()
-        close_btn = QPushButton("Close")
-        close_btn.setFixedHeight(SIZE_CONTROL_MD)
-        close_btn.setStyleSheet(_SECONDARY_BTN)
-        close_btn.clicked.connect(dlg.close)
-        action_row.addWidget(close_btn)
-        fl.addLayout(action_row)
 
         self._clip_filter_face.textChanged.connect(self._on_clip_filters_changed)
         self._clip_filter_camera.currentIndexChanged.connect(self._on_clip_filters_changed)
@@ -1342,24 +1349,16 @@ QSlider::handle:horizontal {{
         self._clip_filter_to.dateChanged.connect(self._on_clip_filters_changed)
         clear_btn.clicked.connect(self._clear_clip_filters)
 
-        self._clip_filters_dialog = dlg
+        return panel
 
-    def _open_clip_filters_dialog(self) -> None:
-        self._ensure_clip_filters_dialog()
-        if not self._clip_filters_dialog:
+    def _toggle_clip_filters_panel(self) -> None:
+        if not self._clip_filters_panel:
             return
-        if self._clip_filters_dialog.isVisible():
-            self._clip_filters_dialog.raise_()
-            self._clip_filters_dialog.activateWindow()
-            return
-        btn = self._filters_btn
-        if btn:
-            pos = btn.mapToGlobal(btn.rect().bottomLeft())
-            dialog_w = self._clip_filters_dialog.width()
-            x = pos.x() - dialog_w + btn.width()
-            y = pos.y() + SPACE_6
-            self._clip_filters_dialog.move(x, y)
-        self._clip_filters_dialog.show()
+        visible = not self._clip_filters_panel.isVisible()
+        self._clip_filters_panel.setVisible(visible)
+        if self._filters_btn:
+            self._filters_btn.setChecked(visible)
+            self._sync_filter_button_text(self._get_clip_filter_values())
 
     def _load_clip_filters(self) -> None:
         if not self._clip_filter_camera:
@@ -1392,14 +1391,18 @@ QSlider::handle:horizontal {{
                     self._clip_filter_object.addItem(name, name)
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             pass
+        self._sync_filter_button_text(self._get_clip_filter_values())
 
     def _on_clip_filters_changed(self, _value=None) -> None:
         if not self._filters_ready or not hasattr(self, "_clips_list"):
             return
         self._clip_page = 0
+        self._sync_filter_button_text(self._get_clip_filter_values())
         self._refresh_clips_list()
 
     def _clear_clip_filters(self) -> None:
+        if not self._filters_ready:
+            return
         self._clip_filter_face.setText("")
         self._clip_filter_camera.setCurrentIndex(0)
         self._clip_filter_rule.setCurrentIndex(0)
@@ -1407,6 +1410,7 @@ QSlider::handle:horizontal {{
         self._clip_filter_from.setDate(self._clip_filter_from.minimumDate())
         self._clip_filter_to.setDate(self._clip_filter_to.minimumDate())
         self._clip_page = 0
+        self._sync_filter_button_text(self._get_clip_filter_values())
         self._refresh_clips_list()
 
     def _get_clip_filter_values(self) -> dict:
@@ -1518,6 +1522,7 @@ QSlider::handle:horizontal {{
         self._clip_cards.clear()
         self._ensure_clips_index_async()
         filters = self._get_clip_filter_values()
+        self._sync_filter_button_text(filters)
         fetch_limit = self._clip_page_size + 1
         offset = self._clip_page * self._clip_page_size
         try:
@@ -1533,9 +1538,15 @@ QSlider::handle:horizontal {{
                 self._clip_page = max(0, self._clip_page - 1)
                 self._refresh_clips_list()
                 return
-            self._clip_status.setText("No clips match filters" if self._clip_filters_active(filters) else "No clips saved yet")
+            empty_text = "No clips match the current filters" if self._clip_filters_active(filters) else "No saved clips yet"
+            self._clips_list.hide()
+            self._clip_empty_label.setText(empty_text)
+            self._clip_empty_label.show()
+            self._clip_status.setText("")
             self._sync_clip_paging()
             return
+        self._clip_empty_label.hide()
+        self._clips_list.show()
         selected_item = None
         seen_paths: set[str] = set()
         seen_names: set[str] = set()
@@ -1581,7 +1592,21 @@ QSlider::handle:horizontal {{
     def _clip_filters_active(filters: dict) -> bool:
         return any(filters.get(key) not in (None, "", -1) for key in ("camera_id", "face_label", "rule_triggered", "object_type", "ts_from", "ts_to"))
 
+    def _sync_filter_button_text(self, filters: dict | None = None) -> None:
+        if not self._filters_btn:
+            return
+        filters = filters or self._get_clip_filter_values()
+        active_count = sum(
+            1
+            for key in ("camera_id", "face_label", "rule_triggered", "object_type", "ts_from", "ts_to")
+            if filters.get(key) not in (None, "", -1)
+        )
+        self._filters_btn.setText("Filters" if active_count <= 0 else f"Filters ({active_count})")
+
     def _sync_clip_paging(self) -> None:
+        has_paging = self._clip_page > 0 or self._clip_has_next_page
+        if self._clip_paging_widget:
+            self._clip_paging_widget.setVisible(has_paging)
         if self._clip_prev_btn:
             self._clip_prev_btn.setEnabled(self._clip_page > 0)
         if self._clip_next_btn:
