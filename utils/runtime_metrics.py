@@ -91,6 +91,7 @@ class _MetricStats:
 
 _lock = threading.RLock()
 _stats: dict[str, _MetricStats] = {}
+_stats_loaded = False
 _last_record_ts: dict[str, float] = {}
 _enabled_cache: tuple[float, bool] = (0.0, True)
 
@@ -163,6 +164,45 @@ def _append_event(metric_key: str, value: float, unit: str, notes: str, context:
         )
 
 
+def _stats_for(metric_key: str, *, unit: str | None = None, notes: str | None = None) -> _MetricStats:
+    meta = _METADATA.get(metric_key, {})
+    return _stats.setdefault(
+        metric_key,
+        _MetricStats(
+            runtime_measure=str(meta.get("runtime_measure") or metric_key),
+            unit=unit or str(meta.get("unit") or ""),
+            notes=notes or str(meta.get("notes") or ""),
+        ),
+    )
+
+
+def _load_existing_events_locked() -> None:
+    global _stats_loaded
+    if _stats_loaded:
+        return
+    _stats_loaded = True
+    if not _EVENTS_CSV.exists():
+        return
+    try:
+        with _EVENTS_CSV.open("r", newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                metric_key = str(row.get("metric_key") or "").strip()
+                if not metric_key:
+                    continue
+                try:
+                    value = float(row.get("value") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                stat = _stats_for(
+                    metric_key,
+                    unit=str(row.get("unit") or "") or None,
+                    notes=str(row.get("notes") or "") or None,
+                )
+                stat.add(value)
+    except Exception:
+        return
+
+
 def _write_summary() -> None:
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -232,6 +272,7 @@ def record_runtime_metric(
 
     now = time.monotonic()
     with _lock:
+        _load_existing_events_locked()
         if min_interval_sec > 0:
             previous = _last_record_ts.get(metric_key, 0.0)
             if now - previous < min_interval_sec:
@@ -241,20 +282,23 @@ def record_runtime_metric(
         meta = _METADATA.get(metric_key, {})
         metric_unit = unit or str(meta.get("unit") or "")
         metric_notes = notes or str(meta.get("notes") or "")
-        stat = _stats.setdefault(
-            metric_key,
-            _MetricStats(
-                runtime_measure=str(meta.get("runtime_measure") or metric_key),
-                unit=metric_unit,
-                notes=metric_notes,
-            ),
-        )
+        stat = _stats_for(metric_key, unit=metric_unit, notes=metric_notes)
         if unit:
             stat.unit = unit
         if notes:
             stat.notes = notes
         stat.add(numeric_value)
         _append_event(metric_key, numeric_value, stat.unit, stat.notes, context)
+        _write_summary()
+
+
+def rebuild_runtime_metric_summaries() -> None:
+    """Rebuild summary CSV/TXT from the append-only runtime metric event CSV."""
+    global _stats_loaded
+    with _lock:
+        _stats.clear()
+        _stats_loaded = False
+        _load_existing_events_locked()
         _write_summary()
 
 
