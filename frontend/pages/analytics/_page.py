@@ -1,3 +1,4 @@
+import contextlib
 import logging
 from datetime import datetime, timezone
 
@@ -106,6 +107,7 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 )
 
 logger = logging.getLogger(__name__)
+_RETIRED_PDF_WORKERS: set[QThread] = set()
 _TITLE_STYLE = text_style(_TEXT_PRI, extra="border: none; padding: 0;")
 _DATE_ARROW_STYLE = text_style(_TEXT_MUTED, size=FONT_SIZE_LABEL, extra="background: transparent;")
 _BG_BASE_STYLE = f"background: {_BG_BASE};"
@@ -413,6 +415,32 @@ class AnalyticsPage(QWidget):
         self._load_filters()
         self._refresh_rules()
         self._refresh()
+
+    def on_unload(self) -> None:
+        self._cleanup_pdf_worker()
+
+    def _cleanup_pdf_worker(self) -> None:
+        worker = self._pdf_worker
+        self._pdf_worker = None
+        if worker is None:
+            return
+        with contextlib.suppress(Exception):
+            worker.finished_export.disconnect()
+        with contextlib.suppress(Exception):
+            worker.finished.disconnect()
+        if worker.isRunning():
+            worker.setParent(None)
+            _RETIRED_PDF_WORKERS.add(worker)
+
+            def _cleanup(w=worker):
+                _RETIRED_PDF_WORKERS.discard(w)
+                with contextlib.suppress(Exception):
+                    w.deleteLater()
+
+            worker.finished.connect(_cleanup)
+        else:
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
 
     def _refresh_cameras(self):
         self._camera_combo.clear()

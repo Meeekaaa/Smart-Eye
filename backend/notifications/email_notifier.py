@@ -8,8 +8,7 @@ from utils import config
 logger = logging.getLogger(__name__)
 
 
-def send_email_alert(to_address, subject, body, html=False):
-    smtp = config.smtp_config()
+def _send_email_with_config(to_address, subject, body, smtp, html=False):
     logger.debug(
         "Email send requested to=%s host=%s port=%s tls=%s user_set=%s pass_set=%s",
         to_address,
@@ -45,9 +44,22 @@ def send_email_alert(to_address, subject, body, html=False):
         return False
 
 
+def send_email_alert(to_address, subject, body, html=False):
+    return _send_email_with_config(to_address, subject, body, config.smtp_config(), html=html)
+
+
 def test_email(to_address):
     return send_email_alert(
         to_address,
         "SmartEye Test Notification",
         "This is a test email from SmartEye.\nIf you received this, email notifications are configured correctly.",
+    )
+
+
+def test_email_with_config(to_address, smtp):
+    return _send_email_with_config(
+        to_address,
+        "SmartEye Test Notification",
+        "This is a test email from SmartEye.\nIf you received this, email notifications are configured correctly.",
+        smtp,
     )

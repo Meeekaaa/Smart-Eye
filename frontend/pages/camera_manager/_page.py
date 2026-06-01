@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import contextlib
 import re
 
 from PySide6.QtCore import QEvent, QSettings, Qt, QObject
@@ -135,6 +136,9 @@ class CameraManagerPage(QWidget):
         self._render_roster([])
 
     def on_unload(self):
+        with contextlib.suppress(Exception):
+            self._add_panel.cleanup_worker()
+        self._remove_dialog_logger()
         self._detail_panel.clear()
         self._render_roster([])
 
@@ -463,7 +467,7 @@ class CameraManagerPage(QWidget):
         self._right_stack.setCurrentIndex(0)
         self._refresh()
         if self._cameras:
-            newest = self._cameras[-1]
+            newest = max(self._cameras, key=lambda cam: int(cam.get("id") or 0))
             self._active_cam_id = newest["id"]
             self._detail_panel.load_camera(newest)
             self._update_roster_active_state()
@@ -504,4 +508,14 @@ class CameraManagerPage(QWidget):
         self._dlg_logger = _DialogLogger()
         app.installEventFilter(self._dlg_logger)
         logger.info("camera_manager dialog logger installed")
+
+    def _remove_dialog_logger(self):
+        logger_obj = getattr(self, "_dlg_logger", None)
+        if logger_obj is None:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            with contextlib.suppress(Exception):
+                app.removeEventFilter(logger_obj)
+        self._dlg_logger = None
 

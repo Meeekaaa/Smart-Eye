@@ -2,6 +2,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import hashlib
 import secrets
 import sqlite3
@@ -153,6 +154,12 @@ _SETTING_DEFAULTS = {
     "experimental_mode_enabled": {"value": "0", "type": "bool", "label": "Experimental settings", "section": "general"},
     "liveness_check_global": {"value": "0", "type": "bool", "label": "Require Liveness Globally", "section": "detection"},
 }
+_DYNAMIC_SETTING_PATTERNS = (
+    re.compile(r"^camera_\d+_max_faces$"),
+    re.compile(r"^camera_\d+_min_face_size$"),
+    re.compile(r"^camera_\d+_plugins_explicit$"),
+)
+_ALLOWED_SETTING_TYPES = {"string", "int", "float", "bool", "json"}
 
 
 def init(db_path):
@@ -235,6 +242,14 @@ def is_bootstrap_admin_email(email: str) -> bool:
 def get_bootstrap_admin_account():
     row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_DEFAULT_ADMIN_EMAIL,)).fetchone()
     return _row_to_account(row) if row else None
+
+
+def _admin_account_count(exclude_id: int | None = None) -> int:
+    if exclude_id is None:
+        row = _conn.execute("SELECT COUNT(*) AS count FROM accounts WHERE is_admin=1").fetchone()
+    else:
+        row = _conn.execute("SELECT COUNT(*) AS count FROM accounts WHERE is_admin=1 AND id!=?", (exclude_id,)).fetchone()
+    return int(row["count"] if row else 0)
 
 
 def reconcile_bootstrap_state() -> bool:
@@ -473,6 +488,8 @@ def create_account(
 
 def update_account(account_id: int, *, email=None, password=None, allowed_tabs=None, is_admin=None, security=None, avatar_path=None, username=None):
     current = get_account(account_id)
+    if current and current.get("is_admin") and is_admin is False and _admin_account_count(exclude_id=account_id) <= 0:
+        raise ValueError("At least one administrator account is required.")
     sets = []
     vals = []
     password_updated = False
@@ -530,6 +547,8 @@ def update_account(account_id: int, *, email=None, password=None, allowed_tabs=N
 
 def delete_account(account_id: int):
     account = get_account(account_id)
+    if account and account.get("is_admin") and _admin_account_count(exclude_id=account_id) <= 0:
+        raise ValueError("At least one administrator account is required.")
     _write_execute("DELETE FROM accounts WHERE id=?", (account_id,))
     if account and is_bootstrap_admin_email(account.get("email", "")):
         _clear_bootstrap_token()
@@ -1603,11 +1622,41 @@ def export_settings_json():
 
 
 def import_settings_json(data):
+    if not isinstance(data, dict):
+        raise ValueError("Settings import must be a JSON object.")
+    current_keys = {row["key"] for row in get_all_settings()}
+    allowed_keys = current_keys | set(_SETTING_DEFAULTS.keys())
+    normalized = {}
+    for key, info in data.items():
+        key = str(key or "").strip()
+        if not key:
+            raise ValueError("Settings import contains an empty key.")
+        if key not in allowed_keys and not any(pattern.match(key) for pattern in _DYNAMIC_SETTING_PATTERNS):
+            raise ValueError(f"Unknown setting key: {key}")
+        if not isinstance(info, dict):
+            raise ValueError(f"Setting {key} must be an object.")
+        vtype = str(info.get("type", "string") or "string").strip().lower()
+        if vtype not in _ALLOWED_SETTING_TYPES:
+            raise ValueError(f"Invalid type for setting {key}: {vtype}")
+        value = info.get("value", "")
+        if vtype == "json" and not isinstance(value, str):
+            value = json.dumps(value)
+        elif value is None:
+            value = ""
+        else:
+            value = str(value)
+        normalized[key] = {
+            "value": value,
+            "type": vtype,
+            "label": str(info.get("label", "") or ""),
+            "section": str(info.get("section", "") or ""),
+        }
+
     def _op(conn):
-        for key, info in data.items():
+        for key, info in normalized.items():
             conn.execute(
                 "INSERT OR REPLACE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
-                (key, info.get("value", ""), info.get("type", "string"), info.get("label", ""), info.get("section", "")),
+                (key, info["value"], info["type"], info["label"], info["section"]),
             )
         conn.commit()
 
@@ -1632,7 +1681,7 @@ def backup(dest_path):
     _write_call(_op)
 
 
-def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_level=None, gender=None):
+def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_level=None, gender=None, rule_name=None):
     q = "SELECT COUNT(*) as total, SUM(CASE WHEN alarm_level>0 THEN 1 ELSE 0 END) as violations FROM detection_logs WHERE 1=1"
     params = []
     if date_from:
@@ -1647,6 +1696,9 @@ def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_
     if min_alarm_level is not None:
         q += " AND alarm_level>=?"
         params.append(int(min_alarm_level))
+    if rule_name:
+        q += " AND rules_triggered LIKE ?"
+        params.append(f"%{rule_name}%")
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))

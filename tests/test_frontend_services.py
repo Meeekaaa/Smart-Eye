@@ -79,3 +79,26 @@ def test_log_service_uses_page_offset(monkeypatch):
 
     assert captured["limit"] == 25
     assert captured["offset"] == 50
+
+
+def test_log_service_filters_type_before_pagination(monkeypatch):
+    calls = []
+
+    def fake_get_detection_logs(**kwargs):
+        calls.append(kwargs)
+        offset = kwargs.get("offset", 0)
+        if offset == 0:
+            return [{"id": idx, "identity": "", "detections": "{}"} for idx in range(1, 251)]
+        if offset == 250:
+            return [
+                {"id": 3, "identity": "Alice", "detections": "{}"},
+                {"id": 4, "identity": "", "detections": '{"object_bboxes":[{"class_name":"person"}]}'},
+            ]
+        return []
+
+    monkeypatch.setattr("frontend.services.log_service.db.get_detection_logs", fake_get_detection_logs)
+
+    rows = LogService().get_logs(log_type="face", limit=1, page=1)
+
+    assert [row["id"] for row in rows] == [3]
+    assert [call["offset"] for call in calls[:2]] == [0, 250]

@@ -16,7 +16,14 @@ class AnalyticsService:
         min_alarm_level=None,
         gender=None,
     ) -> dict:
-        summary = stats_engine.get_summary(date_from, date_to, camera_id, min_alarm_level=min_alarm_level, gender=gender)
+        summary = stats_engine.get_summary(
+            date_from,
+            date_to,
+            camera_id,
+            min_alarm_level=min_alarm_level,
+            gender=gender,
+            rule_name=rule_name,
+        )
         total = int(summary.get("total_detections", 0) or 0)
         violations = int(summary.get("violations", 0) or 0)
         compliant = total - violations

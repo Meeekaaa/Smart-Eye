@@ -164,10 +164,7 @@ class MainWindow(QMainWindow):
                 if key == "settings":
                     self._bind_settings_page(page)
             except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                import traceback
-
-                traceback.print_exc()
-                print(f"NAV_ERROR: failed to create page for {key}")
+                logger.exception("Failed to create page for %s", key)
                 return
         if self._pages[key] is None:
             return

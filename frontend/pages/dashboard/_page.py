@@ -341,13 +341,17 @@ class DashboardPage(QWidget):
         self._disconnect_all_camera_signals()
 
     def on_unload(self):
+        self._refresh_timer.stop()
+        self._hud_timer.stop()
+        with contextlib.suppress(Exception):
+            self._perf_widget.pause()
         self._disconnect_all_camera_signals()
         with contextlib.suppress(Exception):
             self._multi_feed.clear_all()
         with contextlib.suppress(Exception):
             self._clear_alarms()
 
-    def _save_splitter(self):
+    def _save_splitter(self, *_args):
         db.set_setting("dashboard_splitter_state", bytes(self._splitter.saveState().toHex()).decode())
 
     def _auto_set_grid(self, online: int):
@@ -436,7 +440,7 @@ class DashboardPage(QWidget):
             self._last_render_ts[camera_id] = now
             self._multi_feed.update_frame(camera_id, frame, state)
         self._update_hud(camera_id, state)
-        self._update_alarms(state)
+        self._update_alarms(camera_id, state)
         self._perf_widget.update_inference(
             state.get("face_time_ms", 0),
             state.get("object_time_ms", 0),
@@ -469,26 +473,28 @@ class DashboardPage(QWidget):
         self._last_hud_counts_refresh = now
         self._update_hud_counts()
 
-    def _update_alarms(self, state):
+    def _update_alarms(self, camera_id, state):
         violations = state.get("active_violations", [])
+        camera_id = int(camera_id)
         if not violations:
-            self._clear_alarms()
+            self._clear_camera_alarms(camera_id)
             return
         self._no_alarm_label.hide()
         current_ids = set()
         for v in violations:
-            rid = v["rule_id"]
-            current_ids.add(rid)
-            if rid not in self._alarm_badges:
+            rid = int(v["rule_id"])
+            key = (camera_id, rid)
+            current_ids.add(key)
+            if key not in self._alarm_badges:
                 badge = AlarmBadgeWidget(v["rule_name"], v["level"])
                 self._alarms_layout.addWidget(badge)
-                self._alarm_badges[rid] = badge
+                self._alarm_badges[key] = badge
             else:
-                self._alarm_badges[rid].set_level(v["level"])
-                self._alarm_badges[rid].set_text(f"{v['rule_name']} ({int(v['duration'])}s)")
-        for rid in list(self._alarm_badges.keys()):
-            if rid not in current_ids:
-                badge = self._alarm_badges.pop(rid)
+                self._alarm_badges[key].set_level(v["level"])
+                self._alarm_badges[key].set_text(f"{v['rule_name']} ({int(v['duration'])}s)")
+        for key in list(self._alarm_badges.keys()):
+            if key[0] == camera_id and key not in current_ids:
+                badge = self._alarm_badges.pop(key)
                 badge.stop()
                 self._alarms_layout.removeWidget(badge)
                 badge.deleteLater()
@@ -570,6 +576,18 @@ class DashboardPage(QWidget):
             badge.deleteLater()
         self._alarm_badges.clear()
         self._no_alarm_label.show()
+        self._refresh_alarm_badge()
+
+    def _clear_camera_alarms(self, camera_id: int) -> None:
+        for key in list(self._alarm_badges.keys()):
+            if key[0] != camera_id:
+                continue
+            badge = self._alarm_badges.pop(key)
+            badge.stop()
+            self._alarms_layout.removeWidget(badge)
+            badge.deleteLater()
+        if not self._alarm_badges:
+            self._no_alarm_label.show()
         self._refresh_alarm_badge()
 
     def _refresh_stats(self):

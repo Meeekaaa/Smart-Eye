@@ -55,6 +55,7 @@ from ._constants import (
 )
 
 logger = logging.getLogger(__name__)
+_RETIRED_ADD_WORKERS: set[QThread] = set()
 
 
 class AddCameraPanel(QWidget):
@@ -251,6 +252,28 @@ class AddCameraPanel(QWidget):
         )
         self._status_lbl.setVisible(bool(message))
 
+    def cleanup_worker(self) -> None:
+        worker = getattr(self, "_worker", None)
+        if worker is None:
+            return
+        self._worker = None
+        with contextlib.suppress(Exception):
+            worker.done.disconnect()
+        if worker.isRunning():
+            worker.setParent(None)
+            _RETIRED_ADD_WORKERS.add(worker)
+
+            def _cleanup(w=worker):
+                _RETIRED_ADD_WORKERS.discard(w)
+                with contextlib.suppress(Exception):
+                    w.deleteLater()
+
+            worker.finished.connect(_cleanup)
+        else:
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
+        self._set_busy(False)
+
     def _do_save(self):
         name = self._e_name.text().strip()
         source = self._e_source.text().strip()
@@ -304,7 +327,7 @@ class AddCameraPanel(QWidget):
             self._set_busy(False)
             self._worker = None
             if err:
-                logger.exception("camera_manager.add failed name=%s source=%s", name, source)
+                logger.warning("camera_manager.add failed name=%s source=%s: %s", name, source, err)
                 self._set_status(str(err), error=True)
                 return
             if params["enabled"] and cam_id is not None:

@@ -11,7 +11,7 @@ import ast
 import time
 
 import cv2
-from PySide6.QtCore import Qt, QSize, QSettings, QTimer, QEvent, QDate
+from PySide6.QtCore import Qt, QSize, QSettings, QTimer, QEvent, QDate, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -165,6 +165,76 @@ _SPEED_LABEL_STYLE = text_style(_TEXT_MUTED, size=FONT_SIZE_CAPTION, weight=FONT
 
 
 _RETIRED_PLAYBACK_THREADS: list[PlaybackThread] = []
+_RETIRED_CLIP_INDEX_WORKERS: set[QThread] = set()
+
+
+def _parse_clip_filename_parts(name: str) -> tuple[int | None, int | None, str]:
+    if name.startswith("clip_cam") and "_" in name:
+        try:
+            rest = name.replace("clip_cam", "", 1)
+            cam_part, ts_part = rest.split("_", 1)
+            cam_id = int(cam_part)
+            ts = int(ts_part.split(".", 1)[0])
+            return cam_id, ts, "live"
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            return None, None, "live"
+    if name.startswith("clip_"):
+        try:
+            ts = int(name.replace("clip_", "", 1).split(".", 1)[0])
+            return None, ts, "playback"
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            return None, None, "playback"
+    return None, None, "playback"
+
+
+class _ClipIndexWorker(QThread):
+    finished_index = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
+    def run(self) -> None:
+        try:
+            existing = set(db.get_clip_paths(limit=1000) or [])
+        except (sqlite3.Error, OSError, TypeError, ValueError):
+            logger.warning("Failed to read existing clips index", exc_info=True)
+            existing = set()
+        for folder in ("data/clips_live", "data/clips"):
+            if self._cancel_requested:
+                break
+            if not os.path.isdir(folder):
+                continue
+            try:
+                names = sorted(
+                    os.listdir(folder),
+                    key=lambda n, f=folder: os.path.getmtime(os.path.join(f, n)),
+                    reverse=True,
+                )[:1000]
+            except OSError:
+                names = []
+            for name in names:
+                if self._cancel_requested:
+                    break
+                if not name.lower().endswith((".mp4", ".avi", ".mkv", ".mov", ".wmv")):
+                    continue
+                path = os.path.join(folder, name)
+                if path in existing:
+                    continue
+                cam_id, ts, source = _parse_clip_filename_parts(name)
+                if ts is None:
+                    try:
+                        ts = int(os.path.getmtime(path))
+                    except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+                        ts = None
+                try:
+                    db.add_clip(path, source, cam_id, ts, None, [], [])
+                except (sqlite3.Error, OSError, TypeError, ValueError):
+                    logger.warning("Failed to index clip path=%s", path, exc_info=True)
+        self.finished_index.emit()
 
 
 def _icon_btn(icon_path: str, size: int = 36, danger: bool = False) -> QPushButton:
@@ -228,6 +298,8 @@ class PlaybackPage(QWidget):
         self._snapshot_load_timer = QTimer(self)
         self._snapshot_load_timer.setSingleShot(True)
         self._snapshot_load_timer.timeout.connect(self._consume_snapshot_rows)
+        self._clip_index_worker: _ClipIndexWorker | None = None
+        self._clip_index_dirty = True
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -591,6 +663,7 @@ QSlider::handle:horizontal {{
         self._switch_media_tab("clips")
 
     def on_activated(self) -> None:
+        self._clip_index_dirty = True
         self._refresh_clips_list()
         self._snapshots_dirty = True
         if self._active_media_tab == "snapshots":
@@ -598,10 +671,13 @@ QSlider::handle:horizontal {{
 
     def on_deactivated(self) -> None:
         self._seek_timer.stop()
+        self._snapshot_load_timer.stop()
         self._stop(wait_ms=1500)
 
     def on_unload(self) -> None:
         self._seek_timer.stop()
+        self._snapshot_load_timer.stop()
+        self._cleanup_clip_index_worker()
         self._stop(wait_ms=5000)
 
     def _open_file(self) -> None:
@@ -839,6 +915,7 @@ QSlider::handle:horizontal {{
             self._snapshot_load_timer.start(0)
 
     def _on_clip_saved(self, path: str) -> None:
+        self._clip_index_dirty = True
         self._refresh_clips_list()
         self._clip_status.setText(f"Saved: {os.path.basename(path)}")
 
@@ -1367,56 +1444,52 @@ QSlider::handle:horizontal {{
 
     @staticmethod
     def _parse_clip_filename(name: str) -> tuple[int | None, int | None, str]:
-        if name.startswith("clip_cam") and "_" in name:
-            try:
-                rest = name.replace("clip_cam", "", 1)
-                cam_part, ts_part = rest.split("_", 1)
-                cam_id = int(cam_part)
-                ts = int(ts_part.split(".", 1)[0])
-                return cam_id, ts, "live"
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                return None, None, "live"
-        if name.startswith("clip_"):
-            try:
-                ts = int(name.replace("clip_", "", 1).split(".", 1)[0])
-                return None, ts, "playback"
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                return None, None, "playback"
-        return None, None, "playback"
+        return _parse_clip_filename_parts(name)
 
     def _sync_clips_index(self) -> None:
-        try:
-            existing = set(db.get_clip_paths(limit=1000) or [])
-        except (sqlite3.Error, OSError, TypeError, ValueError):
-            logger.warning("Failed to read existing clips index", exc_info=True)
-            existing = set()
-        for folder in ("data/clips_live", "data/clips"):
-            if not os.path.isdir(folder):
-                continue
-            try:
-                names = sorted(
-                    os.listdir(folder),
-                    key=lambda n, f=folder: os.path.getmtime(os.path.join(f, n)),
-                    reverse=True,
-                )[:1000]
-            except OSError:
-                names = []
-            for name in names:
-                if not name.lower().endswith((".mp4", ".avi", ".mkv", ".mov", ".wmv")):
-                    continue
-                path = os.path.join(folder, name)
-                if path in existing:
-                    continue
-                cam_id, ts, source = self._parse_clip_filename(name)
-                if ts is None:
-                    try:
-                        ts = int(os.path.getmtime(path))
-                    except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                        ts = None
-                try:
-                    db.add_clip(path, source, cam_id, ts, None, [], [])
-                except (sqlite3.Error, OSError, TypeError, ValueError):
-                    logger.warning("Failed to index clip path=%s", path, exc_info=True)
+        self._ensure_clips_index_async()
+
+    def _ensure_clips_index_async(self) -> None:
+        if not self._clip_index_dirty:
+            return
+        if self._clip_index_worker is not None and self._clip_index_worker.isRunning():
+            return
+        self._clip_index_dirty = False
+        worker = _ClipIndexWorker(self)
+        self._clip_index_worker = worker
+
+        def _done():
+            self._clip_index_worker = None
+            worker.deleteLater()
+            self._refresh_clips_list()
+
+        worker.finished.connect(_done)
+        worker.start()
+
+    def _cleanup_clip_index_worker(self) -> None:
+        worker = self._clip_index_worker
+        self._clip_index_worker = None
+        if worker is None:
+            return
+        with contextlib.suppress(Exception):
+            worker.finished_index.disconnect()
+        with contextlib.suppress(Exception):
+            worker.finished.disconnect()
+        with contextlib.suppress(Exception):
+            worker.cancel()
+        if worker.isRunning():
+            worker.setParent(None)
+            _RETIRED_CLIP_INDEX_WORKERS.add(worker)
+
+            def _cleanup(w=worker):
+                _RETIRED_CLIP_INDEX_WORKERS.discard(w)
+                with contextlib.suppress(Exception):
+                    w.deleteLater()
+
+            worker.finished.connect(_cleanup)
+        else:
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
 
     def _refresh_clips_list(self) -> None:
         selected_path = None
@@ -1425,7 +1498,7 @@ QSlider::handle:horizontal {{
             selected_path = cur.data(Qt.ItemDataRole.UserRole)
         self._clips_list.clear()
         self._clip_cards.clear()
-        self._sync_clips_index()
+        self._ensure_clips_index_async()
         filters = self._get_clip_filter_values()
         try:
             rows = db.get_clips(
@@ -1515,7 +1588,9 @@ QSlider::handle:horizontal {{
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as e:
             logger.exception("Unexpected clip deletion failure path=%s", path)
             self._clip_status.setText(f"Delete failed: {e}")
+        self._clip_index_dirty = True
         self._refresh_clips_list()
+
     def _start_playback(self, path: str) -> None:
         self._stop(wait_ms=120)
         self._path_edit.setText(path)

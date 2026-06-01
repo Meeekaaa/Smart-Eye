@@ -59,6 +59,8 @@ from ._constants import (
 )
 from ._workers import EnrollWorker
 
+_RETIRED_ENROLL_WORKERS: set[EnrollWorker] = set()
+
 
 class _EnrollPanelMixin:
     def _enroll_dialog(self):
@@ -91,6 +93,7 @@ class _EnrollPanelMixin:
     def _close_enroll_panel(self):
         self._stop_enroll_status_spinner()
         self._stop_enroll_button_spinner()
+        self._cleanup_enroll_worker()
         if self._enroll_panel is not None:
             with contextlib.suppress(Exception):
                 self._enroll_capture.stop_camera()
@@ -101,6 +104,32 @@ class _EnrollPanelMixin:
         self._right_stack.setCurrentIndex(0)
         if hasattr(self, "_pre_enroll_sizes"):
             self._splitter.setSizes(self._pre_enroll_sizes)
+
+    def _cleanup_enroll_worker(self) -> None:
+        worker = getattr(self, "_worker", None)
+        if worker is None:
+            return
+        self._worker = None
+        with contextlib.suppress(Exception):
+            worker.progress.disconnect()
+        with contextlib.suppress(Exception):
+            worker.done.disconnect()
+        if worker.isRunning():
+            worker.setParent(None)
+            _RETIRED_ENROLL_WORKERS.add(worker)
+
+            def _cleanup(w=worker):
+                _RETIRED_ENROLL_WORKERS.discard(w)
+                with contextlib.suppress(Exception):
+                    w.deleteLater()
+
+            worker.finished.connect(_cleanup)
+        else:
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
+        if hasattr(self, "_enroll_save_btn"):
+            self._enroll_save_btn.setEnabled(True)
+            self._enroll_save_btn.setText("Save")
 
     def _build_enroll_widget(self) -> QWidget:
         panel = QWidget()

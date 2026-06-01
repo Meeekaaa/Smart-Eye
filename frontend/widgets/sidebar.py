@@ -606,10 +606,6 @@ class SidebarWidget(QWidget):
         self._ver_lbl_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def _on_nav_clicked(self, key: str):
-        try:
-            print(f"NAV_CLICK: {key}")
-        except (RuntimeError, OSError):
-            pass
         self._on_navigate(key)
 
     def set_active(self, key: str):

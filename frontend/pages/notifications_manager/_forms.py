@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from backend.repository import db
-from backend.notifications.email_notifier import test_email
+from backend.notifications.email_notifier import test_email, test_email_with_config
 from backend.notifications.webhook_notifier import test_webhook
 from frontend.app_theme import safe_set_point_size
 from frontend.services.notification_validation import validate_notification_target
@@ -241,23 +241,42 @@ class SmtpPanel(QWidget):
         flash_status(self._smtp_status_lbl, "Saved")
 
     def _test_smtp(self):
+        host = self._smtp_host.text().strip()
         to = self._smtp_user.text().strip()
+        validation_error = validate_notification_target("email", to)
+        if not host:
+            QMessageBox.warning(self, "Missing Host", "Enter an SMTP host before testing.")
+            self._smtp_host.setFocus()
+            return
+        if validation_error:
+            QMessageBox.warning(self, "Invalid Address", validation_error)
+            self._smtp_user.setFocus()
+            return
         if not to:
             QMessageBox.warning(
                 self,
                 "No Address",
-                "Enter a username / email address first, then save before testing.",
+                "Enter a username / email address first.",
             )
             return
         try:
-            ok = test_email(to)
+            ok = test_email_with_config(
+                to,
+                {
+                    "host": host,
+                    "port": self._smtp_port.value(),
+                    "user": to,
+                    "password": self._smtp_pass.text(),
+                    "tls": self._smtp_tls.isChecked(),
+                },
+            )
             if ok:
                 flash_status(self._smtp_status_lbl, "Test sent")
             else:
                 QMessageBox.warning(
                     self,
                     "Send Failed",
-                    "Could not send the test email.\nVerify host / port / credentials and ensure the settings are saved.",
+                    "Could not send the test email.\nVerify host / port / credentials.",
                 )
         except (OSError, RuntimeError, ValueError) as exc:
             QMessageBox.critical(self, "Error", str(exc))

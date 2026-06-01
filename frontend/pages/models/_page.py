@@ -1075,13 +1075,11 @@ class ModelsPage(QWidget):
             layout.insertWidget(0, icon_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
 
     def _fm_reload_model(self, force: bool = False, download_missing: bool = False) -> None:
-        if self._fm_reload_busy:
+        worker = self._fm_load_worker
+        if self._fm_reload_busy or (worker is not None and worker.isRunning()):
+            self._fm_mark_restart_pending("Model reload already in progress.")
             return
         self._fm_reload_busy = True
-        old = self._fm_load_worker
-        if old is not None and old.isRunning():
-            old.quit()
-            old.wait(800)
         path = self._fm_model_path.text().strip()
         self._start_fm_status_spinner()
         self._fm_model_status.setText(
@@ -1121,7 +1119,7 @@ class ModelsPage(QWidget):
                         mgr.stop_all()
                     if self._do_download and not is_insightface_model_installed(self._name, self._p):
                         download_insightface_model_pack(self._name, self._p)
-                    fm = model_loader.reload_face_model(self._p, cpu_only=True)
+                    fm = model_loader.reload_face_model(self._p)
                     self.finished.emit(fm.is_loaded, "")
                 except Exception as exc:
                     self.finished.emit(False, str(exc))
@@ -1187,6 +1185,37 @@ class ModelsPage(QWidget):
         worker.finished.connect(lambda *_args, w=worker: _FM_LOAD_WORKERS.discard(w))
         worker.finished.connect(worker.deleteLater)
         worker.start()
+
+    def _cleanup_fm_reload_worker(self) -> None:
+        if self._fm_reload_timer:
+            self._fm_reload_timer.stop()
+        self._stop_fm_button_spinner()
+        self._stop_fm_status_spinner()
+        with contextlib.suppress(Exception):
+            if self._fm_progress is not None:
+                self._fm_progress.close()
+        self._fm_progress = None
+        worker = self._fm_load_worker
+        self._fm_load_worker = None
+        self._fm_reload_busy = False
+        if worker is None:
+            return
+        with contextlib.suppress(Exception):
+            worker.finished.disconnect()
+        if worker.isRunning():
+            worker.setParent(None)
+            _FM_LOAD_WORKERS.add(worker)
+
+            def _cleanup(*_args, w=worker):
+                _FM_LOAD_WORKERS.discard(w)
+                with contextlib.suppress(Exception):
+                    w.deleteLater()
+
+            worker.finished.connect(_cleanup)
+        else:
+            _FM_LOAD_WORKERS.discard(worker)
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
 
     def _refresh_plugin_list(self) -> None:
         while self._plugins_vbox.count():
@@ -1493,6 +1522,5 @@ class ModelsPage(QWidget):
             self._fm_reload_timer.stop()
 
     def on_unload(self) -> None:
-        if self._fm_reload_timer:
-            self._fm_reload_timer.stop()
+        self._cleanup_fm_reload_worker()
 

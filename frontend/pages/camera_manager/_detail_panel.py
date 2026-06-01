@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -1034,8 +1035,14 @@ class CameraDetailPanel(QWidget):
             name = e_name.text().strip()
             source = e_source.text().strip()
             logger.info("camera_manager.edit save start id=%s name=%s source=%s", cam_id, name, source)
-            if not name or not source:
-                logger.warning("Camera save skipped: name/source required.")
+            if not name:
+                QMessageBox.warning(self, "Missing Name", "Camera name is required.")
+                e_name.setFocus()
+                return
+            ok, message = CameraService.validate_source(source)
+            if not ok:
+                QMessageBox.warning(self, "Invalid Source", message)
+                e_source.setFocus()
                 return
             try:
                 db.update_camera(
