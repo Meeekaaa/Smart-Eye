@@ -941,15 +941,15 @@ def write_docx(
     auto_sections = {
         "Table of Contents": (
             r'TOC \o "1-3" \h \z \u',
-            "Right-click this field in Word and choose Update Field to generate the table of contents.",
+            "",
         ),
         "List of Figures": (
             r"TOC \f F \h \z",
-            "Right-click this field in Word and choose Update Field to generate the list of figures.",
+            "",
         ),
         "List of Tables": (
             r"TOC \f T \h \z",
-            "Right-click this field in Word and choose Update Field to generate the list of tables.",
+            "",
         ),
     }
     skip_auto_placeholder = False
