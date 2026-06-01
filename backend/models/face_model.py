@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import traceback
+import urllib.request
 import zipfile
 
 import numpy as np
@@ -21,8 +22,11 @@ AVAILABLE_MODELS = {
     "buffalo_sc": "buffalo_sc - Small + shape (fast)",
     "antelopev2": "antelopev2 - Highest accuracy (large)",
 }
+INSIGHTFACE_RELEASE_BASE_URL = "https://github.com/deepinsight/insightface/releases/download/v0.7"
 
-ALLOWED_MODULES = ["detection", "recognition"]
+REQUIRED_MODULES = ("detection", "recognition")
+OPTIONAL_MODULES = ("genderage",)
+ALLOWED_MODULES = list(REQUIRED_MODULES)
 
 
 def normalize_gender(value) -> str:
@@ -87,35 +91,43 @@ def get_allowed_modules() -> list[str]:
         if raw:
             mods = _json.loads(raw) if isinstance(raw, str) else raw
             if isinstance(mods, list):
-                filtered = []
-                for m in mods:
-                    if m in ("detection", "recognition", "genderage") and m not in filtered:
-                        filtered.append(m)
-                if not gender_enabled:
-                    filtered = [m for m in filtered if m != "genderage"]
-                return filtered
+                cleaned = _normalize_allowed_modules(mods, gender_enabled)
+                if cleaned != mods:
+                    with contextlib.suppress(Exception):
+                        db.set_setting("insightface_allowed_modules", _json.dumps(cleaned))
+                return cleaned
     except Exception:
         pass
 
-    base = list(ALLOWED_MODULES)
-    if gender_enabled:
-        base.append("genderage")
-    return base
+    return _normalize_allowed_modules(None, gender_enabled)
 
 
 def set_allowed_modules(modules: list[str]) -> None:
     import json as _json
 
     try:
-        cleaned = []
-        for m in (modules or []):
-            if m in ("detection", "recognition", "genderage") and m not in cleaned:
-                cleaned.append(m)
-        if not db.get_bool("gender_inference_enabled", False):
-            cleaned = [m for m in cleaned if m != "genderage"]
+        cleaned = _normalize_allowed_modules(modules or [], db.get_bool("gender_inference_enabled", False))
         db.set_setting("insightface_allowed_modules", _json.dumps(cleaned))
     except Exception:
         pass
+
+
+def _get_detection_size(default: int = 640) -> tuple[int, int]:
+    try:
+        value = int(db.get_int("insightface_det_size", default) or default)
+    except Exception:
+        value = default
+    value = max(224, min(960, value))
+    value = int(round(value / 32.0) * 32)
+    return (value, value)
+
+
+def _normalize_allowed_modules(modules: list[str] | None, gender_enabled: bool) -> list[str]:
+    cleaned = list(REQUIRED_MODULES)
+    raw = modules if isinstance(modules, list) else None
+    if gender_enabled and (raw is None or "genderage" in raw):
+        cleaned.append("genderage")
+    return cleaned
 
 
 _cached_model_name: str | None = None
@@ -209,7 +221,7 @@ def _detect_providers() -> list[str]:
 
     # Face model must run on a single concrete backend (GPU or CPU), not a hybrid chain.
     if not providers:
-        providers = ["CPUExecutionProvider"] if "CPUExecutionProvider" in avail or not avail else ["CPUExecutionProvider"]
+        providers = ["CPUExecutionProvider"]
     _cached_providers = providers
     _logger.info("Cached providers=%s | available=%s", _cached_providers, avail)
     return _cached_providers
@@ -238,6 +250,10 @@ def _resolve_insightface_package_name(root: str, model_name: str) -> str | None:
     return None
 
 
+class MissingInsightFaceModel(RuntimeError):
+    pass
+
+
 def _find_insightface_root(hint: str = "", model_name: str = "") -> str | None:
     if not model_name:
         model_name = _get_model_name()
@@ -262,7 +278,7 @@ def _find_insightface_root(hint: str = "", model_name: str = "") -> str | None:
     checked = set()
 
     for raw in candidates:
-        root = os.path.abspath(raw)
+        root = os.path.abspath(os.path.expanduser(raw))
         if root in checked:
             continue
         checked.add(root)
@@ -270,18 +286,79 @@ def _find_insightface_root(hint: str = "", model_name: str = "") -> str | None:
             continue
         if _resolve_insightface_package_name(root, model_name):
             return root
-        for zp in glob.glob(os.path.join(root, "**", f"{model_name}.zip"), recursive=True):
-            try:
-                dest = os.path.join(root, "models")
-                os.makedirs(dest, exist_ok=True)
-                with zipfile.ZipFile(zp, "r") as zf:
-                    zf.extractall(dest)
-                if _resolve_insightface_package_name(root, model_name):
-                    return root
-            except Exception:
-                continue
 
     return None
+
+
+def _default_insightface_root(hint: str = "") -> str:
+    configured = ""
+    with contextlib.suppress(Exception):
+        configured = db.get_setting("insightface_model_dir", "") or ""
+    for candidate in (
+        hint,
+        configured,
+        os.path.expanduser("~/.insightface"),
+    ):
+        if candidate:
+            return os.path.abspath(os.path.expanduser(candidate))
+    return os.path.abspath(os.path.expanduser("~/.insightface"))
+
+
+def is_insightface_model_installed(model_name: str, hint: str = "") -> bool:
+    if model_name not in AVAILABLE_MODELS:
+        return False
+    return bool(_find_insightface_root(hint=hint, model_name=model_name))
+
+
+def _safe_extract_zip(zip_path: str, dest_dir: str) -> None:
+    dest_abs = os.path.abspath(dest_dir)
+    os.makedirs(dest_abs, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            target = os.path.abspath(os.path.join(dest_abs, member.filename))
+            if target != dest_abs and not target.startswith(dest_abs + os.sep):
+                raise RuntimeError(f"Unsafe path in model archive: {member.filename}")
+        zf.extractall(dest_abs)
+
+
+def download_insightface_model_pack(model_name: str, hint: str = "") -> str:
+    if model_name not in AVAILABLE_MODELS:
+        raise ValueError(f"Unknown InsightFace model pack: {model_name}")
+
+    installed_root = _find_insightface_root(hint=hint, model_name=model_name)
+    if installed_root:
+        return installed_root
+
+    root = _default_insightface_root(hint)
+    models_dir = os.path.join(root, "models")
+    os.makedirs(models_dir, exist_ok=True)
+    zip_path = os.path.join(models_dir, f"{model_name}.zip")
+    tmp_path = zip_path + ".download"
+    url = f"{INSIGHTFACE_RELEASE_BASE_URL}/{model_name}.zip"
+
+    if os.path.isfile(zip_path):
+        try:
+            _safe_extract_zip(zip_path, models_dir)
+            if _resolve_insightface_package_name(root, model_name):
+                with contextlib.suppress(Exception):
+                    db.set_setting("insightface_model_dir", root)
+                    db.set_setting("insightface_root_cache", root)
+                return root
+        except (OSError, RuntimeError, zipfile.BadZipFile):
+            _logger.warning("Existing InsightFace zip is not usable: %s", zip_path, exc_info=True)
+
+    with contextlib.suppress(OSError):
+        os.remove(tmp_path)
+    urllib.request.urlretrieve(url, tmp_path)
+    os.replace(tmp_path, zip_path)
+    _safe_extract_zip(zip_path, models_dir)
+
+    if not _resolve_insightface_package_name(root, model_name):
+        raise MissingInsightFaceModel(f"Downloaded {model_name}, but no ONNX model files were found after extraction.")
+    with contextlib.suppress(Exception):
+        db.set_setting("insightface_model_dir", root)
+        db.set_setting("insightface_root_cache", root)
+    return root
 
 
 class FaceModel:
@@ -290,6 +367,7 @@ class FaceModel:
         self._loaded = False
         self._loading = False
         self._load_lock = threading.Lock()
+        self._app_lock = threading.RLock()
         self._root_used: str | None = None
         self._model_name: str = _get_model_name()
         self._package_name: str = self._model_name
@@ -300,28 +378,35 @@ class FaceModel:
         self._known_cache_dirty: bool = True
         self._gender_diag_logged: bool = False
 
-    def load(self, model_dir: str = "") -> None:
+    def load(self, model_dir: str = "", providers_override: list[str] | None = None) -> None:
         with self._load_lock:
             if self._loaded:
                 return
             if self._loading:
                 return
             self._loading = True
-
-        try:
-            self._load_internal(model_dir)
-        finally:
-            with self._load_lock:
+            try:
+                self._load_internal(model_dir, providers_override=providers_override)
+            finally:
                 self._loading = False
 
-    def reload(self, model_dir: str = "") -> None:
+    def reload(self, model_dir: str = "", providers_override: list[str] | None = None) -> None:
         global _cached_model_name, _cached_providers
-        _cached_model_name = None
         with self._load_lock:
+            _cached_model_name = None
+            _cached_providers = None
             self._loaded = False
             self._loading = False
-            self._app = None
-        self.load(model_dir)
+            self._known_cache_dirty = True
+            self._known_matrix = None
+            self._known_rows = []
+            with self._app_lock:
+                self._app = None
+            self._loading = True
+            try:
+                self._load_internal(model_dir, providers_override=providers_override)
+            finally:
+                self._loading = False
 
     def load_async(self, model_dir: str = "", callback=None) -> threading.Thread:
         def _async_load():
@@ -338,7 +423,7 @@ class FaceModel:
         thread.start()
         return thread
 
-    def _load_internal(self, model_dir: str = "") -> None:
+    def _load_internal(self, model_dir: str = "", providers_override: list[str] | None = None) -> None:
         try:
             import onnxruntime as ort
             from insightface.app import FaceAnalysis
@@ -347,25 +432,35 @@ class FaceModel:
                 ort.set_default_logger_severity(3)
 
             self._model_name = _get_model_name()
-            providers = _detect_providers()
+            providers = list(providers_override) if providers_override else _detect_providers()
 
             root = None
             try:
                 cached = db.get_setting("insightface_root_cache", "") or ""
-                if cached and os.path.isdir(cached):
-                    model_dir_check = os.path.join(cached, "models", self._model_name)
-                    if os.path.isdir(model_dir_check) and glob.glob(os.path.join(model_dir_check, "*.onnx")):
-                        root = cached
+                if cached and os.path.isdir(cached) and _resolve_insightface_package_name(cached, self._model_name):
+                    root = cached
             except Exception:
                 pass
 
             if root is None:
                 root = _find_insightface_root(hint=model_dir, model_name=self._model_name)
             if not root:
-                root = os.path.expanduser("~/.insightface")
+                self._last_load_error = (
+                    f"InsightFace model pack '{self._model_name}' is not installed. "
+                    "Download it from the Models page or select an installed pack."
+                )
+                self._loaded = False
+                raise MissingInsightFaceModel(self._last_load_error)
 
             self._providers_used = providers
-            resolved_package_name = _resolve_insightface_package_name(root, self._model_name) or self._model_name
+            resolved_package_name = _resolve_insightface_package_name(root, self._model_name)
+            if not resolved_package_name:
+                self._last_load_error = (
+                    f"InsightFace model pack '{self._model_name}' was not found under {root}. "
+                    "Download it from the Models page or select an installed pack."
+                )
+                self._loaded = False
+                raise MissingInsightFaceModel(self._last_load_error)
             self._package_name = resolved_package_name
             if resolved_package_name != self._model_name:
                 _logger.info(
@@ -386,11 +481,13 @@ class FaceModel:
                 return app
 
             try:
-                det_size = (224, 224)
-                self._app = _try_load(providers, det_size)
-                self._root_used = root
-                self._last_load_error = None
-                self._loaded = True
+                det_size = _get_detection_size()
+                app = _try_load(providers, det_size)
+                with self._app_lock:
+                    self._app = app
+                    self._root_used = root
+                    self._last_load_error = None
+                    self._loaded = True
                 with contextlib.suppress(Exception):
                     db.set_setting("insightface_root_cache", root)
                 return
@@ -400,11 +497,13 @@ class FaceModel:
 
             try:
                 cpu_prov = ["CPUExecutionProvider"]
-                self._app = _try_load(cpu_prov, (640, 640))
-                self._providers_used = cpu_prov
-                self._root_used = root
-                self._loaded = True
-                self._last_load_error = None
+                app = _try_load(cpu_prov, (640, 640))
+                with self._app_lock:
+                    self._app = app
+                    self._providers_used = cpu_prov
+                    self._root_used = root
+                    self._loaded = True
+                    self._last_load_error = None
                 with contextlib.suppress(Exception):
                     db.set_setting("insightface_root_cache", root)
                 return
@@ -414,6 +513,9 @@ class FaceModel:
                 self._loaded = False
                 raise Exception(self._last_load_error) from None
 
+        except MissingInsightFaceModel:
+            self._loaded = False
+            raise
         except Exception:
             self._last_load_error = f"Load failed:\n{traceback.format_exc()}"
             self._loaded = False
@@ -429,8 +531,9 @@ class FaceModel:
         if not os.path.isdir(model_dir):
             return []
         loaded_tasks: set[str] = set()
-        if self._app is not None and hasattr(self._app, "models"):
-            loaded_tasks = set(self._app.models.keys())
+        with self._app_lock:
+            if self._app is not None and hasattr(self._app, "models"):
+                loaded_tasks = set(self._app.models.keys())
         allowed = get_allowed_modules()
         result = []
         for onnx_path in sorted(glob.glob(os.path.join(model_dir, "*.onnx"))):
@@ -524,13 +627,14 @@ class FaceModel:
         return arr
 
     def detect_faces(self, frame) -> list[dict]:
-        if not self._loaded or self._app is None:
-            return []
-        try:
-            faces = self._app.get(frame)
-        except Exception:
-            _logger.warning("detect_faces: inference error", exc_info=True)
-            return []
+        with self._app_lock:
+            if not self._loaded or self._app is None:
+                return []
+            try:
+                faces = self._app.get(frame)
+            except Exception:
+                _logger.warning("detect_faces: inference error", exc_info=True)
+                return []
         results = []
         gender_enabled = db.get_bool("gender_inference_enabled", False)
         for f in faces:
@@ -538,15 +642,22 @@ class FaceModel:
                 bbox = [int(b) for b in f.bbox]
                 emb = self._normalize_embedding(f.embedding if hasattr(f, "embedding") else None)
                 gender, gender_conf = _extract_gender_info(f) if gender_enabled else ("unknown", 0.0)
-                results.append(
-                    {
-                        "bbox": bbox,
-                        "embedding": emb,
-                        "det_score": float(f.det_score),
-                        "gender": gender,
-                        "gender_confidence": float(gender_conf),
-                    }
-                )
+                result = {
+                    "bbox": bbox,
+                    "embedding": emb,
+                    "det_score": float(f.det_score),
+                    "gender": gender,
+                    "gender_confidence": float(gender_conf),
+                }
+                kps = getattr(f, "kps", None)
+                if kps is not None:
+                    try:
+                        arr = np.asarray(kps, dtype=np.float32)
+                        if arr.ndim == 2 and arr.shape[0] >= 3 and arr.shape[1] >= 2:
+                            result["landmarks"] = [[float(p[0]), float(p[1])] for p in arr[:, :2]]
+                    except Exception:
+                        pass
+                results.append(result)
             except Exception:
                 continue
         if gender_enabled and faces and not self._gender_diag_logged:

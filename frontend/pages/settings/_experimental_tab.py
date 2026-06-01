@@ -36,7 +36,6 @@ class ExperimentalTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._inbox_toggle = None
-        self._obj_bbox_stabilization_toggle = None
         self._preload_toggles: dict[str, ToggleSwitch] = {}
         self._build_ui()
 
@@ -64,16 +63,6 @@ class ExperimentalTab(QWidget):
                 "Save unknown faces to Inbox",
                 self._inbox_toggle,
                 hint="save unlabeled faces for later review. Turn off to stop captures.",
-            )
-        )
-
-        bl.addWidget(_make_sdiv("Detection Experiments"))
-        self._obj_bbox_stabilization_toggle = ToggleSwitch()
-        bl.addWidget(
-            _srow(
-                "Stable object bounding boxes",
-                self._obj_bbox_stabilization_toggle,
-                hint="On: smoother/steadier boxes. Off: raw faster-moving boxes with less stabilization.",
             )
         )
 
@@ -124,10 +113,6 @@ class ExperimentalTab(QWidget):
 
     def _save(self) -> None:
         db.set_setting("inbox_capture_enabled", 1 if self._inbox_toggle.isChecked() else 0)
-        db.set_setting(
-            "experimental_object_bbox_stabilization",
-            1 if self._obj_bbox_stabilization_toggle.isChecked() else 0,
-        )
         for key, sw in self._preload_toggles.items():
             db.set_setting(f"preload_{key}_page", 1 if sw.isChecked() else 0)
         app_config.invalidate_cache()
@@ -159,6 +144,5 @@ class ExperimentalTab(QWidget):
 
     def load(self) -> None:
         self._inbox_toggle.setChecked(db.get_bool("inbox_capture_enabled", False))
-        self._obj_bbox_stabilization_toggle.setChecked(db.get_bool("experimental_object_bbox_stabilization", True))
         for key, sw in self._preload_toggles.items():
             sw.setChecked(db.get_setting(f"preload_{key}_page", "0") in ("1", 1, True, "true", "True"))

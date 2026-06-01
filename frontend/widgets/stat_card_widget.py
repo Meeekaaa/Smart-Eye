@@ -6,7 +6,6 @@ from frontend.styles._colors import _ACCENT, _BG_OVERLAY, _TEXT_PRI, _TEXT_MUTED
 from frontend.styles._card_styles import _CARD_BASE
 from frontend.styles.page_styles import muted_label_style, text_style, transparent_surface_style
 from frontend.ui_tokens import (
-    FONT_SIZE_LABEL,
     FONT_SIZE_LARGE,
     FONT_SIZE_MICRO,
     FONT_WEIGHT_SEMIBOLD,
@@ -16,7 +15,6 @@ from frontend.ui_tokens import (
     SPACE_14,
     SPACE_6,
     SPACE_MD,
-    SPACE_SM,
     SIZE_MIN_W_SM,
     SIZE_PANEL_H_SM,
 )

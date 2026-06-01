@@ -1,5 +1,6 @@
 import contextlib
 import logging
+from typing import ClassVar
 
 import cv2
 from PySide6.QtCore import Qt, QRect, QTimer, Signal
@@ -138,13 +139,13 @@ logger = logging.getLogger(__name__)
 class FaceCaptureWidget(QWidget):
     capture_complete = Signal(list)
 
-    POSES = ["Front", "Turn Left", "Turn Right", "Look Up"]
-    POSE_HINTS = [
+    POSES: ClassVar[tuple[str, ...]] = ("Front", "Turn Left", "Turn Right", "Look Up")
+    POSE_HINTS: ClassVar[tuple[str, ...]] = (
         "Face the camera straight on",
         "Slowly turn your head to the left",
         "Slowly turn your head to the right",
         "Tilt your head slightly upward",
-    ]
+    )
 
     def __init__(self, parent=None):
         super().__init__(parent)

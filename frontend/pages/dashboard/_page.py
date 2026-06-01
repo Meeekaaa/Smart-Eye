@@ -1,5 +1,6 @@
-﻿import contextlib
+import contextlib
 import logging
+import time
 import warnings
 from pathlib import Path
 
@@ -40,7 +41,6 @@ from frontend.styles._colors import (
     _ACCENT_HI,
     _DANGER_BG_18,
     _DANGER_BORDER_40_ALT,
-    _SUCCESS,
     _SUCCESS_DIM,
     _DANGER,
     _DANGER_DIM,
@@ -54,12 +54,9 @@ from frontend.ui_tokens import (
     FONT_SIZE_CAPTION,
     FONT_SIZE_LABEL,
     FONT_SIZE_LARGE,
-    FONT_SIZE_XXL,
     FONT_WEIGHT_BOLD,
     FONT_WEIGHT_SEMIBOLD,
-    RADIUS_LG,
     RADIUS_MD,
-    RADIUS_XL,
     SIZE_BTN_W_135,
     SIZE_CONTROL_18,
     SIZE_CONTROL_MD,
@@ -68,7 +65,6 @@ from frontend.ui_tokens import (
     SIZE_ICON_LG,
     SIZE_PANEL_MIN,
     SPACE_10,
-    SPACE_14,
     SPACE_20,
     SPACE_5,
     SPACE_6,
@@ -100,6 +96,12 @@ class DashboardPage(QWidget):
         self._state_labels = {}
         self._camera_plugin_names = {}
         self._last_hud_counts_refresh = 0.0
+        self._last_render_ts: dict[int, float] = {}
+        try:
+            render_fps = float(db.get_float("ui_live_render_fps", 15.0) or 15.0)
+        except Exception:
+            render_fps = 15.0
+        self._render_interval_sec = 1.0 / max(1.0, min(60.0, render_fps))
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -128,14 +130,6 @@ class DashboardPage(QWidget):
         _title.setStyleSheet("background: transparent;")
         _hl.addWidget(_title)
         _hl.addStretch()
-
-        reload_btn = QPushButton("Reload Plugins")
-        reload_btn.setFixedHeight(SIZE_CONTROL_MD)
-        reload_btn.setMinimumWidth(SIZE_BTN_W_135)
-        reload_btn.setStyleSheet(_PRIMARY_BTN)
-        reload_btn.setToolTip("Reload all detection models without stopping cameras")
-        reload_btn.clicked.connect(self._reload_plugins)
-        _hl.addWidget(reload_btn)
 
         self._start_btn = QPushButton("Start All")
         self._start_btn.setFixedHeight(SIZE_CONTROL_MD)
@@ -184,11 +178,16 @@ class DashboardPage(QWidget):
 
         icon_path = Path(__file__).resolve().parents[2] / "assets" / "icons" / "cameras.png"
         self._hud_icon = QLabel()
+        pm = QPixmap()
         if icon_path.exists():
             pm = QPixmap(str(icon_path)).scaled(
                 SIZE_CONTROL_18, SIZE_CONTROL_18, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
             )
-        self._hud_icon.setPixmap(pm)
+        if not pm.isNull():
+            self._hud_icon.setPixmap(pm)
+        else:
+            self._hud_icon.setText("C")
+            self._hud_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._hud_icon.setFixedSize(SIZE_CONTROL_18, SIZE_CONTROL_18)
         self._hud_icon.setStyleSheet("background: transparent;")
         hud_layout.addWidget(self._hud_icon)
@@ -288,10 +287,6 @@ class DashboardPage(QWidget):
 
         self._perf_widget = PerformanceWidget()
         right_panel.addWidget(self._perf_widget)
-        self._providers_timer = QTimer(self)
-        self._providers_timer.setInterval(4000)
-        self._providers_timer.timeout.connect(self._update_providers)
-        self._providers_timer.start()
 
         stats_row = QHBoxLayout()
         stats_row.setSpacing(SPACE_10)
@@ -326,7 +321,7 @@ class DashboardPage(QWidget):
         root.addWidget(self._splitter, stretch=1)
 
         self._refresh_timer = QTimer(self)
-        self._refresh_timer.timeout.connect(self._refresh_stats)
+        self._refresh_timer.timeout.connect(self._refresh_dashboard_summary)
         self._refresh_timer.start(5000)
 
     def on_activated(self):
@@ -335,7 +330,7 @@ class DashboardPage(QWidget):
         if hasattr(self, "_perf_widget"):
             with contextlib.suppress(Exception):
                 self._perf_widget.resume()
-        self._refresh_stats()
+        self._refresh_dashboard_summary()
         self._sync_feeds()
 
     def on_deactivated(self):
@@ -346,13 +341,17 @@ class DashboardPage(QWidget):
         self._disconnect_all_camera_signals()
 
     def on_unload(self):
+        self._refresh_timer.stop()
+        self._hud_timer.stop()
+        with contextlib.suppress(Exception):
+            self._perf_widget.pause()
         self._disconnect_all_camera_signals()
         with contextlib.suppress(Exception):
             self._multi_feed.clear_all()
         with contextlib.suppress(Exception):
             self._clear_alarms()
 
-    def _save_splitter(self):
+    def _save_splitter(self, *_args):
         db.set_setting("dashboard_splitter_state", bytes(self._splitter.saveState().toHex()).decode())
 
     def _auto_set_grid(self, online: int):
@@ -366,14 +365,6 @@ class DashboardPage(QWidget):
         if getattr(self, "_last_auto_grid", None) != size:
             self._last_auto_grid = size
             self._multi_feed.set_grid_size(size)
-
-    def _reload_plugins(self):
-        from backend.pipeline.detector_manager import get_manager
-
-        mgr = get_manager()
-        mgr.reload()
-        mgr.invalidate_camera_cache()
-        self._update_hud_counts()
 
     def _start_all(self):
         mgr = get_camera_manager()
@@ -443,9 +434,13 @@ class DashboardPage(QWidget):
             with contextlib.suppress(Exception):
                 thread.error_occurred.disconnect(self._on_error)
     def _on_frame(self, camera_id, frame, state):
-        self._multi_feed.update_frame(camera_id, frame, state)
+        now = time.monotonic()
+        last_render = self._last_render_ts.get(camera_id, 0.0)
+        if now - last_render >= self._render_interval_sec:
+            self._last_render_ts[camera_id] = now
+            self._multi_feed.update_frame(camera_id, frame, state)
         self._update_hud(camera_id, state)
-        self._update_alarms(state)
+        self._update_alarms(camera_id, state)
         self._perf_widget.update_inference(
             state.get("face_time_ms", 0),
             state.get("object_time_ms", 0),
@@ -478,26 +473,28 @@ class DashboardPage(QWidget):
         self._last_hud_counts_refresh = now
         self._update_hud_counts()
 
-    def _update_alarms(self, state):
+    def _update_alarms(self, camera_id, state):
         violations = state.get("active_violations", [])
+        camera_id = int(camera_id)
         if not violations:
-            self._clear_alarms()
+            self._clear_camera_alarms(camera_id)
             return
         self._no_alarm_label.hide()
         current_ids = set()
         for v in violations:
-            rid = v["rule_id"]
-            current_ids.add(rid)
-            if rid not in self._alarm_badges:
+            rid = int(v["rule_id"])
+            key = (camera_id, rid)
+            current_ids.add(key)
+            if key not in self._alarm_badges:
                 badge = AlarmBadgeWidget(v["rule_name"], v["level"])
                 self._alarms_layout.addWidget(badge)
-                self._alarm_badges[rid] = badge
+                self._alarm_badges[key] = badge
             else:
-                self._alarm_badges[rid].set_level(v["level"])
-                self._alarm_badges[rid].set_text(f"{v['rule_name']} ({int(v['duration'])}s)")
-        for rid in list(self._alarm_badges.keys()):
-            if rid not in current_ids:
-                badge = self._alarm_badges.pop(rid)
+                self._alarm_badges[key].set_level(v["level"])
+                self._alarm_badges[key].set_text(f"{v['rule_name']} ({int(v['duration'])}s)")
+        for key in list(self._alarm_badges.keys()):
+            if key[0] == camera_id and key not in current_ids:
+                badge = self._alarm_badges.pop(key)
                 badge.stop()
                 self._alarms_layout.removeWidget(badge)
                 badge.deleteLater()
@@ -581,6 +578,18 @@ class DashboardPage(QWidget):
         self._no_alarm_label.show()
         self._refresh_alarm_badge()
 
+    def _clear_camera_alarms(self, camera_id: int) -> None:
+        for key in list(self._alarm_badges.keys()):
+            if key[0] != camera_id:
+                continue
+            badge = self._alarm_badges.pop(key)
+            badge.stop()
+            self._alarms_layout.removeWidget(badge)
+            badge.deleteLater()
+        if not self._alarm_badges:
+            self._no_alarm_label.show()
+        self._refresh_alarm_badge()
+
     def _refresh_stats(self):
         from datetime import date
 
@@ -593,4 +602,8 @@ class DashboardPage(QWidget):
         self._stat_total.set_value(str(total))
         self._stat_violations.set_value(str(violations))
         self._stat_compliance.set_value(f"{rate:.0f}%")
+
+    def _refresh_dashboard_summary(self):
+        self._refresh_stats()
+        self._update_providers()
 

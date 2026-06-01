@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QStackedWidget, QVBoxLayout
+from PySide6.QtWidgets import QFrame, QVBoxLayout
 
 from frontend.styles._colors import _BG_BASE_92
 from frontend.widgets.auth_login_card import AuthLoginCard
 from frontend.widgets.auth_reset_card import AuthResetCard
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 
 
 class AuthOverlay(QFrame):
@@ -17,7 +18,7 @@ class AuthOverlay(QFrame):
         self.login_card = AuthLoginCard(self)
         self.reset_card = AuthResetCard(self)
 
-        self.stack = QStackedWidget()
+        self.stack = AnimatedStackedWidget()
         self.stack.setStyleSheet("QStackedWidget { background: transparent; }")
         self.stack.addWidget(self.login_card)
         self.stack.addWidget(self.reset_card)

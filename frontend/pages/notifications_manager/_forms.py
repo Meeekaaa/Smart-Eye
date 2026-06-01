@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 
@@ -20,9 +20,10 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from backend.repository import db
-from backend.notifications.email_notifier import test_email
+from backend.notifications.email_notifier import test_email, test_email_with_config
 from backend.notifications.webhook_notifier import test_webhook
 from frontend.app_theme import safe_set_point_size
+from frontend.services.notification_validation import validate_notification_target
 from frontend.styles._hero_header import make_hero_header
 from frontend.styles._banner_styles import make_edit_banner
 from frontend.styles._btn_styles import _SECONDARY_BTN
@@ -41,14 +42,12 @@ from frontend.widgets.action_feedback import (
 
 from frontend.styles._input_styles import _FORM_INPUT_TITLE
 from frontend.styles._colors import (
-    _ACCENT,
     _ACCENT_BG_08,
     _ACCENT_BG_12,
     _ACCENT_HI,
     _ACCENT_HI_BG_18,
     _BG_RAISED,
     _BG_SURFACE,
-    _BORDER,
     _BORDER_DIM,
     _TEXT_MUTED,
     _TEXT_PRI,
@@ -70,8 +69,6 @@ from frontend.ui_tokens import (
     SIZE_BTN_W_80,
     SIZE_CONTROL_32,
     SIZE_CONTROL_MD,
-    SIZE_CONTROL_SM,
-    SIZE_ITEM_SM,
     SIZE_LABEL_W,
     SIZE_ROW_LG,
     SIZE_ROW_72,
@@ -88,7 +85,6 @@ from frontend.ui_tokens import (
     SPACE_XXXS,
 )
 from ._constants import (
-    _PRIMARY_BTN,
     _TEXT_BTN_BLUE,
     _TEXT_BTN_GHOST,
     _TEXT_BTN_RED,
@@ -245,23 +241,42 @@ class SmtpPanel(QWidget):
         flash_status(self._smtp_status_lbl, "Saved")
 
     def _test_smtp(self):
+        host = self._smtp_host.text().strip()
         to = self._smtp_user.text().strip()
+        validation_error = validate_notification_target("email", to)
+        if not host:
+            QMessageBox.warning(self, "Missing Host", "Enter an SMTP host before testing.")
+            self._smtp_host.setFocus()
+            return
+        if validation_error:
+            QMessageBox.warning(self, "Invalid Address", validation_error)
+            self._smtp_user.setFocus()
+            return
         if not to:
             QMessageBox.warning(
                 self,
                 "No Address",
-                "Enter a username / email address first, then save before testing.",
+                "Enter a username / email address first.",
             )
             return
         try:
-            ok = test_email(to)
+            ok = test_email_with_config(
+                to,
+                {
+                    "host": host,
+                    "port": self._smtp_port.value(),
+                    "user": to,
+                    "password": self._smtp_pass.text(),
+                    "tls": self._smtp_tls.isChecked(),
+                },
+            )
             if ok:
                 flash_status(self._smtp_status_lbl, "Test sent")
             else:
                 QMessageBox.warning(
                     self,
                     "Send Failed",
-                    "Could not send the test email.\nVerify host / port / credentials and ensure the settings are saved.",
+                    "Could not send the test email.\nVerify host / port / credentials.",
                 )
         except (OSError, RuntimeError, ValueError) as exc:
             QMessageBox.critical(self, "Error", str(exc))
@@ -636,9 +651,20 @@ class ProfilePanel(QWidget):
         self.suppress_requested.emit()
         name = self._e_name.text().strip()
         target = self._e_endpoint.text().strip()
-        if not name or not target:
+        if not name:
+            QMessageBox.warning(self, "Missing Name", "Notification profile name is required.")
+            self._e_name.setFocus()
+            return
+        if not target:
+            QMessageBox.warning(self, "Missing Target", "Notification profile target is required.")
+            self._e_endpoint.setFocus()
             return
         ptype = self._e_type.currentText()
+        validation_error = validate_notification_target(ptype, target)
+        if validation_error:
+            QMessageBox.warning(self, "Invalid Target", validation_error)
+            self._e_endpoint.setFocus()
+            return
         token = self._e_auth.text().strip() if ptype == "webhook" else ""
         en_val = 1 if self._e_enabled.isChecked() else 0
         saved_id = None
@@ -664,9 +690,18 @@ class ProfilePanel(QWidget):
         self._set_edit_mode(False)
 
     def _test_profile(self, profile: dict):
-        ptype = profile.get("type", "email")
-        target = profile.get("endpoint", "")
-        token = profile.get("auth_token", "")
+        if self._e_type is not None and isValid(self._e_type):
+            ptype = self._e_type.currentText()
+            target = self._e_endpoint.text().strip() if self._e_endpoint is not None and isValid(self._e_endpoint) else ""
+            token = self._e_auth.text().strip() if self._e_auth is not None and isValid(self._e_auth) else ""
+        else:
+            ptype = profile.get("type", "email")
+            target = profile.get("endpoint", "")
+            token = profile.get("auth_token", "")
+        validation_error = validate_notification_target(ptype, target)
+        if validation_error:
+            QMessageBox.warning(self, "Invalid Target", validation_error)
+            return
         try:
             if ptype == "email":
                 ok = test_email(target)

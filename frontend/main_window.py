@@ -1,4 +1,6 @@
-﻿import contextlib
+import contextlib
+import importlib
+import sys
 import logging
 
 from PySide6.QtCore import (
@@ -16,7 +18,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QMenu,
-    QStackedWidget,
     QSystemTrayIcon,
     QWidget,
 )
@@ -26,15 +27,16 @@ from frontend.styles._colors import _BG_NAV_DARK
 from frontend.ui_tokens import SPACE_XXXS
 
 from frontend.services.rules_service import RulesService
-from frontend.state.page_factory import build_pages, create_page, get_page_specs, UnloadPolicy
+from frontend.state.page_factory import build_pages, get_page_specs, UnloadPolicy
 from backend.services.service_manager import get_service_manager
 from frontend.widgets.alert_popup import show_alert
 from frontend.navigation import nav_label_map
 from frontend.widgets.auth_overlay import AuthOverlay
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.widgets.sidebar import SidebarWidget, LOGO_ICON_PATH
 from frontend.theme_runtime import invalidate_theme_cache
 from frontend.state.session import build_trusted_user, compute_access, pick_initial_tab
-from utils.auth_validation import get_email_validation_error, is_admin_recovery_code
+from utils.auth_validation import get_email_validation_error
 from utils import config
 
 logger = logging.getLogger(__name__)
@@ -75,7 +77,7 @@ class MainWindow(QMainWindow):
             current_theme=self._current_theme,
         )
 
-        self._stack = QStackedWidget()
+        self._stack = AnimatedStackedWidget()
         self._stack.setStyleSheet("background: transparent;")
 
         main_layout.addWidget(self._sidebar)
@@ -130,16 +132,12 @@ class MainWindow(QMainWindow):
         self._build_auth_overlay()
         self._init_system_tray()
         if "dashboard" in self._pages:
+            page = self._pages.get("dashboard")
+            self._schedule_page_activation(page)
             self._stack.setCurrentWidget(self._pages["dashboard"])
             self._sidebar.set_active("dashboard")
             self._current_key = "dashboard"
             self._mark_active("dashboard")
-            try:
-                page = self._pages.get("dashboard")
-                if page is not None and hasattr(page, "on_activated"):
-                    page.on_activated()
-            except Exception:
-                pass
             self._log_page_state("startup")
         self._sidebar.set_access(set(), False)
         if self._auth_required:
@@ -158,7 +156,7 @@ class MainWindow(QMainWindow):
             return
         if self._pages[key] is None:
             try:
-                page = create_page(key, self._rules_service)
+                page = self._page_factory_module().create_page(key, self._rules_service)
                 if page is None:
                     return
                 self._pages[key] = page
@@ -166,10 +164,7 @@ class MainWindow(QMainWindow):
                 if key == "settings":
                     self._bind_settings_page(page)
             except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                import traceback
-
-                traceback.print_exc()
-                print(f"NAV_ERROR: failed to create page for {key}")
+                logger.exception("Failed to create page for %s", key)
                 return
         if self._pages[key] is None:
             return
@@ -187,17 +182,33 @@ class MainWindow(QMainWindow):
                 current.on_deactivated()
         if prev_key:
             self._release_services(prev_key)
+        page = self._pages[key]
+        self._schedule_page_activation(page)
         self._stack.setCurrentWidget(self._pages[key])
         self._sidebar.set_active(key)
-        page = self._pages[key]
         self._current_key = key
         self._mark_active(key)
         self._acquire_services(key)
-        if hasattr(page, "on_activated"):
-            page.on_activated()
         if prev_key and prev_key != key:
             self._maybe_unload_on_leave(prev_key)
         self._log_page_state(f"navigated:{key}")
+
+    def _schedule_page_activation(self, page) -> None:
+        if page is None or not hasattr(page, "on_activated"):
+            return
+        if isinstance(self._stack, AnimatedStackedWidget):
+            def _on_finish(widget):
+                with contextlib.suppress(Exception):
+                    self._stack.transition_finished.disconnect(_on_finish)
+                if widget is page:
+                    try:
+                        page.on_activated()
+                    except Exception:
+                        pass
+
+            self._stack.transition_finished.connect(_on_finish)
+        else:
+            QTimer.singleShot(0, page.on_activated)
 
     def _on_theme_changed(self, theme_name: str) -> None:
         try:
@@ -207,20 +218,22 @@ class MainWindow(QMainWindow):
             invalidate_theme_cache()
             with contextlib.suppress(Exception):
                 config.invalidate_cache()
+            self._reload_theme_modules()
+            with contextlib.suppress(Exception):
+                self._page_specs = self._page_factory_module().get_page_specs(self._rules_service)
             loaded_keys = [k for k, v in self._pages.items() if v is not None]
-            self.setStyleSheet(get_theme(self._current_theme))
+            app = QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(get_theme(self._current_theme))
+            else:
+                self.setStyleSheet(get_theme(self._current_theme))
             if hasattr(self, "_side_border") and self._side_border is not None:
                 self._side_border.setStyleSheet(f"background: {_c._BG_NAV_DARK}; border: none;")
             if hasattr(self, "_sidebar") and hasattr(self._sidebar, "refresh_theme"):
                 self._sidebar.refresh_theme()
-            self._theme_dirty_pages = set(loaded_keys)
 
-
-            current_key = self._current_key or "dashboard"
-            if current_key == "settings":
-                QTimer.singleShot(120, lambda ck=current_key: self._recreate_current_after_theme(ck))
-            elif current_key:
-                QTimer.singleShot(0, lambda ck=current_key: self._recreate_current_after_theme(ck))
+            for key in list(loaded_keys):
+                self._recreate_page(key)
 
 
             self.style().unpolish(self)
@@ -230,6 +243,39 @@ class MainWindow(QMainWindow):
         except Exception:
             logger.exception("Failed to apply theme at runtime")
 
+    def _reload_theme_modules(self) -> None:
+        style_targets = (
+            "frontend.styles._colors",
+            "frontend.styles._btn_styles",
+            "frontend.styles._input_styles",
+            "frontend.styles.page_styles",
+            "frontend.styles.theme_parts",
+        )
+
+        for name in style_targets:
+            module = sys.modules.get(name)
+            if module is not None:
+                with contextlib.suppress(Exception):
+                    importlib.reload(module)
+
+        for name in sorted(sys.modules.keys()):
+            if not (name.startswith("frontend.pages.") or name.startswith("frontend.widgets.")):
+                continue
+            module = sys.modules.get(name)
+            if module is None:
+                continue
+            with contextlib.suppress(Exception):
+                importlib.reload(module)
+
+        module = sys.modules.get("frontend.state.page_factory")
+        if module is not None:
+            with contextlib.suppress(Exception):
+                importlib.reload(module)
+
+    @staticmethod
+    def _page_factory_module():
+        return importlib.import_module("frontend.state.page_factory")
+
     def _bind_settings_page(self, page) -> None:
         if page is None:
             return
@@ -238,6 +284,21 @@ class MainWindow(QMainWindow):
         if hasattr(page, "theme_changed"):
             with contextlib.suppress(Exception):
                 page.theme_changed.disconnect(self._on_theme_changed)
+            with contextlib.suppress(Exception):
+                page.theme_changed.connect(self._on_theme_changed)
+        if hasattr(page, "tab_transitions_changed"):
+            with contextlib.suppress(Exception):
+                page.tab_transitions_changed.disconnect(self._set_tab_transitions_enabled)
+            with contextlib.suppress(Exception):
+                page.tab_transitions_changed.connect(self._set_tab_transitions_enabled)
+
+    def _set_tab_transitions_enabled(self, enabled: bool) -> None:
+        app = QApplication.instance()
+        widgets = app.allWidgets() if app is not None else []
+        for widget in widgets:
+            if isinstance(widget, AnimatedStackedWidget):
+                with contextlib.suppress(Exception):
+                    widget.setAnimationsEnabled(enabled)
 
     def _recreate_current_after_theme(self, expected_key: str) -> None:
         if self._current_key != expected_key:
@@ -268,7 +329,7 @@ class MainWindow(QMainWindow):
                 old.deleteLater()
             self._pages[key] = None
 
-        page = create_page(key, self._rules_service)
+        page = self._page_factory_module().create_page(key, self._rules_service)
         if page is None:
             return
         self._pages[key] = page
@@ -383,7 +444,6 @@ class MainWindow(QMainWindow):
         self._login_card.submit.connect(lambda e, p: self._attempt_login(e, p))
         self._login_card.reset_requested.connect(self._show_reset_card)
         self._reset_card.back.connect(self._show_login_card)
-        self._reset_card.admin_login_requested.connect(self._handle_admin_code_login)
         self._reset_card.load_requested.connect(self._load_reset_questions)
         self._reset_card.submit_requested.connect(self._handle_reset_submit)
 
@@ -472,46 +532,11 @@ class MainWindow(QMainWindow):
         self._on_login_success(account)
 
     def _try_restore_remembered_session(self) -> bool:
-        try:
-            if not self._db.get_bool("remember_login", False):
-                return False
-        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-            return False
+        # The retired DB-only automatic session restore is intentionally disabled.
+        # "Remember" now only controls whether the email field is prefilled.
+        return False
 
-        account = None
-        try:
-            remembered_id = str(self._db.get_setting("remember_account_id", "") or "").strip()
-            if remembered_id:
-                account = self._db.get_account(int(remembered_id))
-        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-            account = None
-
-        if not account:
-            try:
-                remembered_email = str(self._db.get_setting("remember_email", "") or "").strip()
-                if remembered_email:
-                    row = self._db.get_account_by_email(remembered_email)
-                    if row:
-                        account = self._db.get_account(int(row["id"]))
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                account = None
-
-        if not account:
-            with contextlib.suppress(Exception):
-                self._db.set_setting("remember_login", False)
-                self._db.set_setting("remember_email", "")
-                self._db.set_setting("remember_account_id", "")
-            return False
-
-        try:
-            self._db.touch_last_login(account["id"])
-        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-            pass
-
-        self._on_login_success(account, restored_session=True)
-        return True
-
-    def _on_login_success(self, account: dict, restored_session: bool = False, update_remembered_login: bool = True):
+    def _on_login_success(self, account: dict, update_remembered_login: bool = True):
         self._session_user = account
         if self._db.bootstrap_password_change_required(account):
             QMessageBox.warning(
@@ -547,14 +572,12 @@ class MainWindow(QMainWindow):
         self._set_auth_error("")
         self._login_card.clear_password()
         if update_remembered_login:
-            if restored_session or self._login_card.remember_me():
+            if self._login_card.remember_me():
                 self._db.set_setting("remember_login", True)
                 self._db.set_setting("remember_email", account.get("email", ""))
-                self._db.set_setting("remember_account_id", account.get("id", ""))
             else:
                 self._db.set_setting("remember_login", False)
                 self._db.set_setting("remember_email", "")
-                self._db.set_setting("remember_account_id", "")
 
     def _on_bootstrap_cleared(self):
         if not self._session_user:
@@ -580,23 +603,41 @@ class MainWindow(QMainWindow):
 
     def _poll_alerts(self):
         try:
+            summary = (
+                self._db.get_conn()
+                .execute(
+                    "SELECT COUNT(*) AS cnt, MAX(id) AS max_id "
+                    "FROM detection_logs "
+                    "WHERE alarm_level>0 AND id>? "
+                    "AND COALESCE(rules_triggered, '') NOT LIKE '%\"LivenessFailure\"%'",
+                    (self._alert_last_id,),
+                )
+                .fetchone()
+            )
+            if not summary or int(summary["cnt"] or 0) <= 0:
+                return
+            count = int(summary["cnt"] or 0)
+            max_id = int(summary["max_id"] or self._alert_last_id)
+            self._alert_last_id = max(self._alert_last_id, max_id)
+            if not self._db.get_bool("popup_notifications_enabled", True):
+                return
             row = (
                 self._db.get_conn()
                 .execute(
-                    "SELECT id, camera_id, timestamp, rules_triggered "
-                    "FROM detection_logs WHERE alarm_level>0 AND id>? "
-                    "ORDER BY id DESC LIMIT 1",
-                    (self._alert_last_id,),
+                    "SELECT camera_id, timestamp, rules_triggered "
+                    "FROM detection_logs WHERE id=?",
+                    (max_id,),
                 )
                 .fetchone()
             )
             if not row:
                 return
-            alert_id, cam_id, ts, rules = row
-            self._alert_last_id = max(self._alert_last_id, int(alert_id))
+            cam_id, ts, rules = row
             subtitle = f"Camera {cam_id} - {ts}"
             if rules:
                 subtitle += f" - {rules}"
+            if count > 1:
+                subtitle = f"{count} new violations. Latest: {subtitle}"
             show_alert(self, "Alert triggered!", subtitle)
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             pass
@@ -667,22 +708,6 @@ class MainWindow(QMainWindow):
         self._reset_card.set_error("")
         self._resize_auth_stack(self._reset_card)
 
-    def _handle_admin_code_login(self, code: str):
-        if not is_admin_recovery_code(code):
-            self._reset_card.set_error("Invalid admin code.")
-            return
-        account = self._db.get_first_admin_account()
-        if not account:
-            self._reset_card.set_error("No admin account is available.")
-            return
-        self._reset_card.set_error("")
-        self._reset_card.clear_answers()
-        self._on_login_success(account, update_remembered_login=False)
-        self._navigate("settings", allow_unauth=True)
-        page = self._pages.get("settings")
-        if page and hasattr(page, "focus_accounts_tab"):
-            page.focus_accounts_tab()
-
     def _handle_reset_submit(self, email: str, answers: list[str], new_pw: str, confirm: str):
         email = (email or "").strip()
         email_error = get_email_validation_error(email, allow_internal=True)
@@ -731,7 +756,7 @@ class MainWindow(QMainWindow):
                 self._tray_icon.hide()
 
 
-        for key, page in list(self._pages.items()):
+        for page in list(self._pages.values()):
             if page is None:
                 continue
             with contextlib.suppress(Exception):
@@ -746,6 +771,10 @@ class MainWindow(QMainWindow):
             from backend.camera.camera_manager import get_camera_manager
 
             get_camera_manager().stop_all()
+        with contextlib.suppress(Exception):
+            from backend.pipeline.alarm_handler import close_handler
+
+            close_handler()
         with contextlib.suppress(Exception):
             from utils.system_monitor import get_monitor
 

@@ -8,20 +8,20 @@ from frontend.app_theme import page_base_styles
 
 
 from frontend.styles._colors import (
-    _BG_BASE,
-    _BG_OVERLAY,
+    _BG_BASE as _BG_BASE,
+    _BG_OVERLAY as _BG_OVERLAY,
     _BG_SURFACE,
     _BG_RAISED,
     _BORDER,
     _BORDER_DIM,
     _TEXT_PRI,
     _TEXT_SEC,
-    _TEXT_MUTED,
+    _TEXT_MUTED as _TEXT_MUTED,
     _ACCENT,
     _ACCENT_HI,
-    _DANGER,
-    _SUCCESS,
-    _SUCCESS_DIM,
+    _DANGER as _DANGER,
+    _SUCCESS as _SUCCESS,
+    _SUCCESS_DIM as _SUCCESS_DIM,
     _AVATAR_BG_1,
     _AVATAR_BG_2,
     _AVATAR_BG_3,
@@ -53,13 +53,13 @@ from frontend.ui_tokens import (
 )
 from frontend.styles._input_styles import _FORM_INPUTS, _FORM_COMBO
 from frontend.styles._btn_styles import (
-    _DANGER_BTN,
-    _PRIMARY_BTN,
-    _TEXT_BTN_BLUE,
-    _TEXT_BTN_GHOST,
-    _TEXT_BTN_RED,
-    _TEXT_BTN_RED_CONFIRM,
-    _TEXT_BTN_RED_DEFAULT,
+    _DANGER_BTN as _DANGER_BTN,
+    _PRIMARY_BTN as _PRIMARY_BTN,
+    _TEXT_BTN_BLUE as _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST as _TEXT_BTN_GHOST,
+    _TEXT_BTN_RED as _TEXT_BTN_RED,
+    _TEXT_BTN_RED_CONFIRM as _TEXT_BTN_RED_CONFIRM,
+    _TEXT_BTN_RED_DEFAULT as _TEXT_BTN_RED_DEFAULT,
 )
 
 _AVATAR_BG_COLORS = [

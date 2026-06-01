@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import re
 
-
-ADMIN_RECOVERY_CODE = "5555"
 INTERNAL_EMAIL_DOMAINS = {"smarteye.local"}
 ALLOWED_EMAIL_DOMAINS = {
     "gmail.com",
@@ -43,7 +41,3 @@ def get_email_validation_error(email: str, *, allow_internal: bool = True) -> st
     if domain not in ALLOWED_EMAIL_DOMAINS:
         return "Use a supported email provider like gmail.com, yahoo.com, or outlook.com."
     return None
-
-
-def is_admin_recovery_code(code: str) -> bool:
-    return (code or "").strip() == ADMIN_RECOVERY_CODE

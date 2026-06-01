@@ -142,6 +142,18 @@ def main():
     app.setApplicationName("SmartEye")
     app.setOrganizationName("SmartEye")
 
+    from frontend.widgets.press_animation_filter import install_press_animations
+
+    try:
+        install_press_animations(app, press_opacity=0.88)
+    except Exception:
+        pass
+    try:
+        from frontend.widgets.button_auto_fit import install_button_auto_fit
+
+        install_button_auto_fit(app)
+    except Exception:
+        pass
     try:
         from frontend.widgets.combobox_popup import setup_combobox_popup_behavior
 
@@ -179,6 +191,12 @@ def main():
         from backend.camera.camera_manager import get_camera_manager
 
         get_camera_manager().stop_all()
+    except Exception:
+        pass
+    try:
+        from backend.pipeline.alarm_handler import close_handler
+
+        close_handler()
     except Exception:
         pass
     db.close()

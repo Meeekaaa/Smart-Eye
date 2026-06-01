@@ -1,11 +1,10 @@
 import contextlib
 import json
 import os
-from datetime import datetime, timedelta
 from PySide6.QtGui import QTextCharFormat, QColor
 
 from PySide6.QtCore import QDate, Qt, QTimer, QSettings, QSignalBlocker
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -20,7 +19,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
-    QStackedWidget,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -33,7 +31,9 @@ from frontend.dialogs import apply_popup_theme
 from frontend.widgets.confirm_delete_button import ConfirmDeleteButton
 from frontend.app_theme import page_base_styles, safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.services.log_service import LogService
 from frontend.widgets.toggle_switch import ToggleSwitch
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 
 from frontend.styles._colors import (
     _ACCENT,
@@ -205,11 +205,11 @@ QHeaderView::section {{
     font-size: {FONT_SIZE_CAPTION}px;
 }}
 """
-_DETAIL_TABS_STYLE = f"""
-QWidget#DetailsStackWrap {{
+_DETAIL_TABS_STYLE = """
+QWidget#DetailsStackWrap {
     border: none;
     background: transparent;
-}}
+}
 """
 
 
@@ -218,6 +218,7 @@ class LogsViewerPage(QWidget):
         super().__init__(parent)
         self.setStyleSheet(_STYLESHEET)
         self._settings = QSettings("SmartEye", "LogsViewer")
+        self._log_service = LogService()
         self._is_active = False
 
         root = QVBoxLayout(self)
@@ -314,6 +315,27 @@ class LogsViewerPage(QWidget):
         self._type_combo.setFixedWidth(SIZE_FIELD_W_SM)
         self._type_combo.setStyleSheet(_FORM_COMBO)
         fl1.addWidget(self._type_combo)
+
+        self._limit_spin = QSpinBox()
+        self._limit_spin.setRange(50, 5000)
+        self._limit_spin.setSingleStep(50)
+        self._limit_spin.setValue(int(self._settings.value("filters/limit", 500, type=int) or 500))
+        self._limit_spin.setFixedHeight(SIZE_CONTROL_MD)
+        self._limit_spin.setFixedWidth(90)
+        self._limit_spin.setStyleSheet(_FORM_INPUTS)
+        self._limit_spin.setToolTip("Maximum rows to load")
+        fl1.addSpacing(SPACE_SM)
+        fl1.addWidget(self._limit_spin)
+
+        self._page_spin = QSpinBox()
+        self._page_spin.setRange(1, 9999)
+        self._page_spin.setValue(int(self._settings.value("filters/page", 1, type=int) or 1))
+        self._page_spin.setFixedHeight(SIZE_CONTROL_MD)
+        self._page_spin.setFixedWidth(76)
+        self._page_spin.setStyleSheet(_FORM_INPUTS)
+        self._page_spin.setToolTip("Result page")
+        fl1.addSpacing(SPACE_SM)
+        fl1.addWidget(self._page_spin)
 
         fl1.addSpacing(SPACE_14)
         _fs2 = QWidget()
@@ -502,7 +524,7 @@ class LogsViewerPage(QWidget):
         stack_layout.setContentsMargins(0, 0, 0, 0)
         stack_layout.setSpacing(0)
 
-        self._details_stack = QStackedWidget()
+        self._details_stack = AnimatedStackedWidget()
         stack_layout.addWidget(self._details_stack)
 
         self._detail_table = QTableWidget()
@@ -585,6 +607,7 @@ class LogsViewerPage(QWidget):
         self._settings.setValue("details/current_tab", idx)
 
     def _refresh(self):
+        selected_id = self._selected_log_id()
         date_range = normalize_date_range(qdate_to_date(self._date_from.date()), qdate_to_date(self._date_to.date()))
         if date_range.swapped:
             self._date_from.setDate(QDate(date_range.start.year, date_range.start.month, date_range.start.day))
@@ -594,14 +617,19 @@ class LogsViewerPage(QWidget):
         camera_id = self._camera_combo.currentData()
         log_type = self._type_combo.currentText()
         search = self._search_edit.text().strip()
+        limit = self._limit_spin.value()
+        page = self._page_spin.value()
+        self._settings.setValue("filters/limit", limit)
+        self._settings.setValue("filters/page", page)
 
-        logs = db.get_detection_logs(
+        logs = self._log_service.get_logs(
             camera_id=camera_id,
             date_from=date_from,
             date_to=date_to,
-            identity=search if search else None,
-            alarm_level=1 if log_type == "violation" else None,
-            limit=500,
+            log_type=log_type,
+            search=search,
+            limit=limit,
+            page=page,
         )
         self._logs_data = logs
         self._table.setRowCount(len(logs))
@@ -616,18 +644,19 @@ class LogsViewerPage(QWidget):
                 ts = ts.replace("T", "  ").split(".")[0]
             self._table.setItem(i, 0, self._cell(ts))
 
-            cam = db.get_camera(log.get("camera_id"))
-            self._table.setItem(i, 1, self._cell(cam["name"] if cam else str(log.get("camera_id", ""))))
+            cam_name = log.get("camera_name")
+            if not cam_name:
+                cam = db.get_camera(log.get("camera_id"))
+                cam_name = cam["name"] if cam else str(log.get("camera_id", ""))
+            self._table.setItem(i, 1, self._cell(cam_name))
             self._table.setItem(i, 2, self._cell(log.get("identity", "-")))
-            detections = {}
-            with contextlib.suppress(Exception):
-                detections = json.loads(log.get("detections", "{}"))
+            detections = self._log_service.parse_detections(log)
             gender = str((detections or {}).get("gender") or "unknown").title()
             self._table.setItem(i, 3, self._cell(gender))
-            self._table.setItem(i, 4, self._cell("detection"))
+            self._table.setItem(i, 4, self._cell(self._display_log_type(log)))
 
             is_violation = (log.get("alarm_level", 0) or 0) > 0
-            viol_item = QTableWidgetItem("● YES" if is_violation else "NO")
+            viol_item = QTableWidgetItem("* YES" if is_violation else "NO")
             viol_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             viol_item.setForeground(QColor(_DANGER if is_violation else _TEXT_MUTED))
             self._table.setItem(i, 5, viol_item)
@@ -639,7 +668,34 @@ class LogsViewerPage(QWidget):
                 snap_item.setToolTip(snap)
             self._table.setItem(i, 6, snap_item)
 
-        self._count_label.setText(f"{len(logs)} log{'s' if len(logs) != 1 else ''}")
+        self._count_label.setText(f"{len(logs)} log{'s' if len(logs) != 1 else ''} · page {page}")
+        if selected_id is not None:
+            for idx, log in enumerate(logs):
+                if log.get("id") == selected_id:
+                    self._table.selectRow(idx)
+                    self._on_row_selected(idx, 0, -1, -1)
+                    break
+            else:
+                self._detail_table.setRowCount(0)
+                self._detail_text.clear()
+        elif not logs:
+            self._detail_table.setRowCount(0)
+            self._detail_text.clear()
+
+    def _selected_log_id(self):
+        row = self._table.currentRow()
+        if 0 <= row < len(self._logs_data):
+            return self._logs_data[row].get("id")
+        return None
+
+    def _display_log_type(self, log: dict) -> str:
+        if (log.get("alarm_level", 0) or 0) > 0:
+            return "violation"
+        if self._log_service.matches_type(log, "object"):
+            return "object"
+        if self._log_service.matches_type(log, "face"):
+            return "face"
+        return "detection"
 
     @staticmethod
     def _cell(text: str) -> QTableWidgetItem:
@@ -767,11 +823,8 @@ class LogsViewerPage(QWidget):
         rows = {item.row() for item in self._table.selectedIndexes()}
         if not rows:
             return
-        for row in sorted(rows, reverse=True):
-            if row < len(self._logs_data):
-                log_id = self._logs_data[row].get("id")
-                if log_id:
-                    db.delete_detection_log(log_id)
+        log_ids = [self._logs_data[row].get("id") for row in sorted(rows) if row < len(self._logs_data)]
+        self._log_service.delete_logs([log_id for log_id in log_ids if log_id])
         self._refresh()
 
     def _cleanup_logs(self):
@@ -803,8 +856,7 @@ class LogsViewerPage(QWidget):
         delete_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
 
         def do_delete():
-            cutoff = (datetime.now() - timedelta(days=days_spin.value())).isoformat()
-            count = db.cleanup_old_logs(cutoff)
+            count = self._log_service.cleanup_older_than_days(days_spin.value())
             QMessageBox.information(dlg, "Cleanup", f"Deleted {count} old log(s).")
             dlg.accept()
             self._refresh()

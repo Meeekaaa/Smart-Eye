@@ -2,6 +2,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import hashlib
 import secrets
 import sqlite3
@@ -52,12 +53,13 @@ def _writer_loop():
     global _writer_conn, _writer_thread_id
     _writer_thread_id = threading.get_ident()
     _writer_conn = _create_conn()
-    while not _writer_stop.is_set():
+    while True:
         try:
             item = _write_queue.get(timeout=0.2)
         except queue.Empty:
             continue
         if item is None:
+            _write_queue.task_done()
             break
         kind = item[0]
         result_q = item[-1]
@@ -97,6 +99,8 @@ def _ensure_writer():
 
 
 def _queue_write_item(item):
+    if _writer_stop.is_set():
+        raise RuntimeError("Database writer is closed")
     try:
         _write_queue.put(item, timeout=2.0)
         return
@@ -139,6 +143,23 @@ _SEC_QUESTIONS_DEFAULT = (
     "What city were you born in?",
     "What is your pet name?",
 )
+_SETTING_DEFAULTS = {
+    "theme": {"value": "dark", "type": "string", "label": "UI Theme", "section": "appearance"},
+    "theme_json_path": {"value": "", "type": "string", "label": "Theme JSON Path", "section": "general"},
+    "log_retention_days": {"value": "90", "type": "int", "label": "Log Retention (days)", "section": "data"},
+    "auto_start_cameras": {"value": "0", "type": "bool", "label": "Auto-start cameras on launch", "section": "general"},
+    "minimize_to_tray": {"value": "0", "type": "bool", "label": "Minimize to tray", "section": "general"},
+    "popup_notifications_enabled": {"value": "1", "type": "bool", "label": "Popup notifications", "section": "notifications"},
+    "debug_mode_enabled": {"value": "0", "type": "bool", "label": "Debugging mode", "section": "general"},
+    "experimental_mode_enabled": {"value": "0", "type": "bool", "label": "Experimental settings", "section": "general"},
+    "liveness_check_global": {"value": "0", "type": "bool", "label": "Require Liveness Globally", "section": "detection"},
+}
+_DYNAMIC_SETTING_PATTERNS = (
+    re.compile(r"^camera_\d+_max_faces$"),
+    re.compile(r"^camera_\d+_min_face_size$"),
+    re.compile(r"^camera_\d+_plugins_explicit$"),
+)
+_ALLOWED_SETTING_TYPES = {"string", "int", "float", "bool", "json"}
 
 
 def init(db_path):
@@ -170,7 +191,7 @@ def init(db_path):
     try:
         tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
         if "cameras" not in tables:
-            logging.getLogger(__name__).warning("Essential table 'cameras' missing — attempting to reapply schema.sql")
+            logging.getLogger(__name__).warning("Essential table 'cameras' missing - attempting to reapply schema.sql")
             try:
                 with open(schema_path) as f:
                     conn.executescript(f.read())
@@ -186,20 +207,28 @@ def get_conn():
 
 
 def close():
+    global _writer_thread, _writer_thread_id, _writer_conn
+    _writer_stop.set()
+    wait_for_writer_idle(timeout_sec=5.0)
     conn = getattr(_conn_local, "conn", None)
     if conn:
         conn.close()
         _conn_local.conn = None
-    _writer_stop.set()
+    writer = _writer_thread
+    if writer and writer.is_alive():
+        try:
+            _write_queue.put(None, timeout=2.0)
+        except Exception:
+            pass
     try:
-        _write_queue.put_nowait(None)
+        if writer and writer.is_alive():
+            writer.join(timeout=2.0)
     except Exception:
         pass
-    try:
-        if _writer_thread and _writer_thread.is_alive():
-            _writer_thread.join(timeout=2.0)
-    except Exception:
-        pass
+    if writer is _writer_thread and (writer is None or not writer.is_alive()):
+        _writer_thread = None
+        _writer_thread_id = None
+        _writer_conn = None
 
 
 def _normalize_email(email: str) -> str:
@@ -213,6 +242,14 @@ def is_bootstrap_admin_email(email: str) -> bool:
 def get_bootstrap_admin_account():
     row = _conn.execute("SELECT * FROM accounts WHERE email=?", (_DEFAULT_ADMIN_EMAIL,)).fetchone()
     return _row_to_account(row) if row else None
+
+
+def _admin_account_count(exclude_id: int | None = None) -> int:
+    if exclude_id is None:
+        row = _conn.execute("SELECT COUNT(*) AS count FROM accounts WHERE is_admin=1").fetchone()
+    else:
+        row = _conn.execute("SELECT COUNT(*) AS count FROM accounts WHERE is_admin=1 AND id!=?", (exclude_id,)).fetchone()
+    return int(row["count"] if row else 0)
 
 
 def reconcile_bootstrap_state() -> bool:
@@ -304,6 +341,23 @@ def _write_call(fn):
     if err:
         raise err
     return res
+
+
+def write_transaction(fn):
+    def _op(conn):
+        result = fn(conn)
+        conn.commit()
+        return result
+
+    return _write_call(_op)
+
+
+def get_setting_defaults(keys=None):
+    if keys is None:
+        selected = _SETTING_DEFAULTS
+    else:
+        selected = {key: _SETTING_DEFAULTS[key] for key in keys if key in _SETTING_DEFAULTS}
+    return {key: dict(value) for key, value in selected.items()}
 
 
 def _hash_password(password: str, salt: str | None = None):
@@ -434,6 +488,8 @@ def create_account(
 
 def update_account(account_id: int, *, email=None, password=None, allowed_tabs=None, is_admin=None, security=None, avatar_path=None, username=None):
     current = get_account(account_id)
+    if current and current.get("is_admin") and is_admin is False and _admin_account_count(exclude_id=account_id) <= 0:
+        raise ValueError("At least one administrator account is required.")
     sets = []
     vals = []
     password_updated = False
@@ -491,6 +547,8 @@ def update_account(account_id: int, *, email=None, password=None, allowed_tabs=N
 
 def delete_account(account_id: int):
     account = get_account(account_id)
+    if account and account.get("is_admin") and _admin_account_count(exclude_id=account_id) <= 0:
+        raise ValueError("At least one administrator account is required.")
     _write_execute("DELETE FROM accounts WHERE id=?", (account_id,))
     if account and is_bootstrap_admin_email(account.get("email", "")):
         _clear_bootstrap_token()
@@ -800,25 +858,28 @@ def get_plugin_cameras(plugin_id):
 
 
 def assign_camera_plugin_class(camera_id, plugin_class_id, enabled=1, confidence=None):
+    enabled_value = 1 if enabled in (1, True, "1", "true") else 0
 
-    try:
-        _conn.execute(
-            "INSERT INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(camera_id, plugin_class_id) DO UPDATE SET enabled=excluded.enabled, confidence=excluded.confidence",
-            (camera_id, plugin_class_id, 1 if enabled in (1, True, "1", "true") else 0, confidence),
-        )
-        _conn.commit()
-    except Exception:
-        cur = _conn.execute(
-            "UPDATE camera_plugin_classes SET enabled=?, confidence=? WHERE camera_id=? AND plugin_class_id=?",
-            (1 if enabled in (1, True, "1", "true") else 0, confidence, camera_id, plugin_class_id),
-        )
-        if cur.rowcount == 0:
-            _conn.execute(
-                "INSERT OR IGNORE INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?)",
-                (camera_id, plugin_class_id, 1 if enabled in (1, True, "1", "true") else 0, confidence),
+    def _op(conn):
+        try:
+            conn.execute(
+                "INSERT INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(camera_id, plugin_class_id) DO UPDATE SET enabled=excluded.enabled, confidence=excluded.confidence",
+                (camera_id, plugin_class_id, enabled_value, confidence),
             )
-            _conn.commit()
+        except Exception:
+            cur = conn.execute(
+                "UPDATE camera_plugin_classes SET enabled=?, confidence=? WHERE camera_id=? AND plugin_class_id=?",
+                (enabled_value, confidence, camera_id, plugin_class_id),
+            )
+            if cur.rowcount == 0:
+                conn.execute(
+                    "INSERT OR IGNORE INTO camera_plugin_classes (camera_id, plugin_class_id, enabled, confidence) VALUES (?, ?, ?, ?)",
+                    (camera_id, plugin_class_id, enabled_value, confidence),
+                )
+        conn.commit()
+
+    _write_call(_op)
 
 
 def get_camera_plugin_classes(camera_id, plugin_id):
@@ -1139,6 +1200,36 @@ def _normalize_gender_value(value) -> str:
     return "unknown"
 
 
+def _identity_to_text(identity) -> str:
+    if identity is None:
+        return ""
+    if isinstance(identity, dict):
+        for key in ("name", "identity", "email", "id"):
+            value = identity.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+        return ""
+    return str(identity).strip()
+
+
+def _json_safe_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _json_safe_value(v) for k, v in value.items() if k != "embedding"}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(v) for v in value]
+    if isinstance(value, bytes):
+        return "<bytes>"
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        try:
+            return _json_safe_value(tolist())
+        except Exception:
+            return str(value)
+    return str(value)
+
+
 def _normalize_detections_payload(payload):
     data = payload
     if isinstance(payload, str):
@@ -1148,27 +1239,126 @@ def _normalize_detections_payload(payload):
             data = {}
     if not isinstance(data, dict):
         data = {}
-    data = dict(data)
+    data = _json_safe_value(dict(data))
     data["gender"] = _normalize_gender_value(data.get("gender"))
     return data
 
 
-def add_detection_log(camera_id, identity=None, face_confidence=0.0, detections=None, rules_triggered=None, alarm_level=0, snapshot_path=""):
-    det_norm = _normalize_detections_payload(detections) if isinstance(detections, dict) else _normalize_detections_payload(detections)
-    det_json = json.dumps(det_norm)
-    rules_json = json.dumps(rules_triggered) if isinstance(rules_triggered, list) else rules_triggered
-    gender_norm = _normalize_gender_value(det_norm.get("gender"))
+def _serialize_rules_triggered(rules_triggered):
+    if rules_triggered is None:
+        return None
+    if isinstance(rules_triggered, str):
+        return rules_triggered
+    return json.dumps(_json_safe_value(rules_triggered))
+
+
+def _has_identity_value(identity: str) -> int:
     ident_text = (identity or "").strip().lower()
-    has_identity = 1 if ident_text and ident_text != "unknown" else 0
+    return 1 if ident_text and ident_text != "unknown" else 0
+
+
+def _prepare_detection_log_values(record: dict, *, include_timestamp: bool = False):
+    det_norm = _normalize_detections_payload(record.get("detections"))
+    identity = _identity_to_text(record.get("identity"))
+    if not identity:
+        identity = _identity_to_text(det_norm.get("identity"))
+    gender_norm = _normalize_gender_value(record.get("gender") or det_norm.get("gender"))
+    values = [
+        record.get("camera_id"),
+        record.get("zone_id"),
+        identity,
+        float(record.get("face_confidence") or 0.0),
+        json.dumps(det_norm),
+        gender_norm,
+        _serialize_rules_triggered(record.get("rules_triggered")),
+        int(record.get("alarm_level") or 0),
+        record.get("snapshot_path") or "",
+        int(record.get("reviewed") or 0),
+        _has_identity_value(identity),
+    ]
+    if include_timestamp:
+        values.insert(0, record.get("timestamp") or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+    return tuple(values)
+
+
+def _db_size_bytes() -> int:
+    if not _DB_PATH:
+        return 0
+    total = 0
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        path = f"{_DB_PATH}{suffix}"
+        with contextlib.suppress(OSError):
+            total += os.path.getsize(path)
+    return total
+
+
+def is_db_size_over_limit() -> bool:
+    try:
+        limit = int(get_setting("db_size_limit_bytes", 0) or 0)
+    except Exception:
+        limit = 0
+    return limit > 0 and _db_size_bytes() >= limit
+
+
+def can_persist_events() -> bool:
+    return not is_db_size_over_limit()
+
+
+def add_detection_log(camera_id, identity=None, face_confidence=0.0, detections=None, rules_triggered=None, alarm_level=0, snapshot_path=""):
+    if is_db_size_over_limit():
+        logging.getLogger(__name__).warning("Skipping detection log: database size limit reached")
+        return None
+    values = _prepare_detection_log_values(
+        {
+            "camera_id": camera_id,
+            "identity": identity,
+            "face_confidence": face_confidence,
+            "detections": detections,
+            "rules_triggered": rules_triggered,
+            "alarm_level": alarm_level,
+            "snapshot_path": snapshot_path,
+        }
+    )
     cur = _write_execute(
-        "INSERT INTO detection_logs (camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, has_identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (camera_id, None, identity, face_confidence, det_json, gender_norm, rules_json, alarm_level, snapshot_path, has_identity),
+        "INSERT INTO detection_logs "
+        "(camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, reviewed, has_identity) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        values,
     )
     return cur.lastrowid
 
 
+def seed_detection_logs(rows, *, ignore_size_limit: bool = False) -> int:
+    if not rows:
+        return 0
+    if not ignore_size_limit and is_db_size_over_limit():
+        logging.getLogger(__name__).warning("Skipping detection log seed: database size limit reached")
+        return 0
+    prepared = [_prepare_detection_log_values(dict(row), include_timestamp=True) for row in rows]
+
+    def _op(conn):
+        conn.executemany(
+            "INSERT INTO detection_logs "
+            "(timestamp, camera_id, zone_id, identity, face_confidence, detections, gender_norm, rules_triggered, alarm_level, snapshot_path, reviewed, has_identity) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            prepared,
+        )
+        conn.commit()
+        return len(prepared)
+
+    return _write_call(_op)
+
+
 def get_detection_logs(
-    camera_id=None, date_from=None, date_to=None, identity=None, rule_name=None, alarm_level=None, reviewed=None, limit=500
+    camera_id=None,
+    date_from=None,
+    date_to=None,
+    identity=None,
+    rule_name=None,
+    alarm_level=None,
+    reviewed=None,
+    limit=500,
+    offset=0,
 ):
     q = """SELECT dl.*, c.name as camera_name
            FROM detection_logs dl
@@ -1198,8 +1388,9 @@ def get_detection_logs(
     if reviewed is not None:
         q += " AND dl.reviewed=?"
         params.append(reviewed)
-    q += " ORDER BY dl.timestamp DESC LIMIT ?"
-    params.append(limit)
+    q += " ORDER BY dl.timestamp DESC LIMIT ? OFFSET ?"
+    params.append(max(1, int(limit or 1)))
+    params.append(max(0, int(offset or 0)))
     rows = [dict(r) for r in _conn.execute(q, params).fetchall()]
     for row in rows:
         row["detections"] = json.dumps(_normalize_detections_payload(row.get("detections")))
@@ -1338,6 +1529,9 @@ def get_all_settings(section=None):
 
 
 def add_clip(path: str, source: str, camera_id: int | None, ts: int | None, face_label: str | None, rules, object_types):
+    if is_db_size_over_limit():
+        logging.getLogger(__name__).warning("Skipping clip metadata: database size limit reached")
+        return
     try:
         rules_json = json.dumps(rules or [])
         obj_json = json.dumps(object_types or [])
@@ -1378,6 +1572,7 @@ def get_clips(
     face_label: str | None = None,
     object_type: str | None = None,
     rule_triggered: str | None = None,
+    limit: int | None = 500,
 ):
     q = "SELECT * FROM clips WHERE 1=1"
     params = []
@@ -1400,8 +1595,20 @@ def get_clips(
         q += " AND object_types LIKE ?"
         params.append(f"%{object_type}%")
     q += " ORDER BY ts DESC"
+    if limit is not None:
+        q += " LIMIT ?"
+        params.append(max(1, int(limit or 500)))
     rows = _conn.execute(q, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_clip_paths(limit: int | None = 1000):
+    q = "SELECT path FROM clips ORDER BY ts DESC"
+    params = []
+    if limit is not None:
+        q += " LIMIT ?"
+        params.append(max(1, int(limit or 1000)))
+    return [r["path"] for r in _conn.execute(q, params).fetchall()]
 
 
 def get_settings_sections():
@@ -1415,11 +1622,41 @@ def export_settings_json():
 
 
 def import_settings_json(data):
+    if not isinstance(data, dict):
+        raise ValueError("Settings import must be a JSON object.")
+    current_keys = {row["key"] for row in get_all_settings()}
+    allowed_keys = current_keys | set(_SETTING_DEFAULTS.keys())
+    normalized = {}
+    for key, info in data.items():
+        key = str(key or "").strip()
+        if not key:
+            raise ValueError("Settings import contains an empty key.")
+        if key not in allowed_keys and not any(pattern.match(key) for pattern in _DYNAMIC_SETTING_PATTERNS):
+            raise ValueError(f"Unknown setting key: {key}")
+        if not isinstance(info, dict):
+            raise ValueError(f"Setting {key} must be an object.")
+        vtype = str(info.get("type", "string") or "string").strip().lower()
+        if vtype not in _ALLOWED_SETTING_TYPES:
+            raise ValueError(f"Invalid type for setting {key}: {vtype}")
+        value = info.get("value", "")
+        if vtype == "json" and not isinstance(value, str):
+            value = json.dumps(value)
+        elif value is None:
+            value = ""
+        else:
+            value = str(value)
+        normalized[key] = {
+            "value": value,
+            "type": vtype,
+            "label": str(info.get("label", "") or ""),
+            "section": str(info.get("section", "") or ""),
+        }
+
     def _op(conn):
-        for key, info in data.items():
+        for key, info in normalized.items():
             conn.execute(
                 "INSERT OR REPLACE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
-                (key, info.get("value", ""), info.get("type", "string"), info.get("label", ""), info.get("section", "")),
+                (key, info["value"], info["type"], info["label"], info["section"]),
             )
         conn.commit()
 
@@ -1444,7 +1681,7 @@ def backup(dest_path):
     _write_call(_op)
 
 
-def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_level=None, gender=None):
+def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_level=None, gender=None, rule_name=None):
     q = "SELECT COUNT(*) as total, SUM(CASE WHEN alarm_level>0 THEN 1 ELSE 0 END) as violations FROM detection_logs WHERE 1=1"
     params = []
     if date_from:
@@ -1459,6 +1696,9 @@ def get_detection_stats(date_from=None, date_to=None, camera_id=None, min_alarm_
     if min_alarm_level is not None:
         q += " AND alarm_level>=?"
         params.append(int(min_alarm_level))
+    if rule_name:
+        q += " AND rules_triggered LIKE ?"
+        params.append(f"%{rule_name}%")
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
@@ -1501,7 +1741,9 @@ def get_hourly_violations(
 def get_violations_by_person(
     date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, limit=20, gender=None
 ):
-    q = """SELECT identity, gender_norm
+    q = """SELECT identity,
+           COALESCE(MAX(CASE WHEN gender_norm != 'unknown' THEN gender_norm END), 'unknown') as gender,
+           COUNT(*) as count
            FROM detection_logs
            WHERE identity IS NOT NULL AND identity != ''"""
     params = []
@@ -1525,23 +1767,13 @@ def get_violations_by_person(
     if gender:
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
-    rows = [dict(r) for r in _conn.execute(q, params).fetchall()]
-    agg = {}
-    for row in rows:
-        identity = row.get("identity") or ""
-        if not identity:
-            continue
-        entry = agg.setdefault(identity, {"identity": identity, "count": 0, "gender": "unknown"})
-        entry["count"] += 1
-        g = _normalize_gender_value(row.get("gender_norm"))
-        if entry["gender"] == "unknown" and g != "unknown":
-            entry["gender"] = g
-    result = sorted(agg.values(), key=lambda x: x["count"], reverse=True)
-    return result[: max(1, int(limit or 20))]
+    q += " GROUP BY identity ORDER BY count DESC LIMIT ?"
+    params.append(max(1, int(limit or 20)))
+    return [dict(r) for r in _conn.execute(q, params).fetchall()]
 
 
 def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_name=None, min_alarm_level=None, gender=None):
-    q = "SELECT gender_norm FROM detection_logs WHERE 1=1"
+    q = "SELECT gender_norm, COUNT(*) as count FROM detection_logs WHERE 1=1"
     params = []
     if min_alarm_level is not None:
         q += " AND alarm_level>=?"
@@ -1564,10 +1796,11 @@ def get_violations_by_gender(date_from=None, date_to=None, camera_id=None, rule_
         q += " AND gender_norm=?"
         params.append(_normalize_gender_value(gender))
 
+    q += " GROUP BY gender_norm"
     counts = {"male": 0, "female": 0, "unknown": 0}
     for row in _conn.execute(q, params).fetchall():
         g = _normalize_gender_value(row["gender_norm"])
-        counts[g] = counts.get(g, 0) + 1
+        counts[g] = counts.get(g, 0) + int(row["count"] or 0)
     return [
         {"gender": "male", "count": counts["male"]},
         {"gender": "female", "count": counts["female"]},

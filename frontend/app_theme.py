@@ -1,4 +1,4 @@
-﻿import importlib
+import importlib
 
 
 def get_theme(name="dark"):

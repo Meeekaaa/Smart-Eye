@@ -11,18 +11,24 @@ from frontend.app_theme import page_base_styles
 
 from frontend.styles.page_styles import section_kicker_style
 from frontend.styles._colors import (
-    _ACCENT,
-    _BG_SURFACE,
+    _ACCENT as _ACCENT,
+    _BG_SURFACE as _BG_SURFACE,
     _BG_RAISED,
     _BORDER,
     _BORDER_DIM,
-    _TEXT_PRI,
+    _TEXT_PRI as _TEXT_PRI,
     _TEXT_SEC,
     _TEXT_MUTED,
     _ACCENT_HI_BG_28,
     _ACCENT_HI_BG_55,
 )
-from frontend.styles._btn_styles import _DANGER_BTN, _PRIMARY_BTN, _SECONDARY_BTN, _TAB_BTN, _TAB_BTN_ACTIVE
+from frontend.styles._btn_styles import (
+    _DANGER_BTN as _DANGER_BTN,
+    _PRIMARY_BTN as _PRIMARY_BTN,
+    _SECONDARY_BTN as _SECONDARY_BTN,
+    _TAB_BTN as _TAB_BTN,
+    _TAB_BTN_ACTIVE as _TAB_BTN_ACTIVE,
+)
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_LABEL,

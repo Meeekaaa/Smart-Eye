@@ -20,11 +20,14 @@ htmlcov/
 Thumbs.db
 
 build/
+build_assets/
 dist/
 site/
 docs/generated/exports/
 *.egg-info/
 *.spec
+SmartEye.nsi
+frontend/pyside6_plugins/
 
 data/faces/*
 data/faces_inbox/*
@@ -37,7 +40,10 @@ data/clips/*
 data/clips_live/*
 data/cache/*
 
-tests/
+docs/
+final_report.md
+final_report.pdf
+tests/notes.txt
 
 data/*.db-wal
 data/*.db-shm

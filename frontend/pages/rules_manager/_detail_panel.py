@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -21,6 +23,8 @@ from frontend.styles._colors import (
     _ACCENT_HI_BG_20,
     _BORDER_DIM_00,
     _BORDER_DIM_55,
+    _DANGER,
+    _SUCCESS,
 )
 from ._widgets import build_rule_header
 from frontend.ui_tokens import (
@@ -270,6 +274,12 @@ class RuleDetailPanel(QWidget):
         close_btn.setStyleSheet(_TEXT_BTN_GHOST)
         close_btn.clicked.connect(lambda: self.close_requested.emit())
 
+        simulate_btn = QPushButton("Simulate")
+        simulate_btn.setFixedHeight(SIZE_CONTROL_MD)
+        simulate_btn.setFixedWidth(SIZE_BTN_W_MD)
+        simulate_btn.setStyleSheet(_TEXT_BTN_BLUE)
+        simulate_btn.clicked.connect(self.open_simulation)
+
         edit_btn = QPushButton("Edit")
         edit_btn.setFixedHeight(SIZE_CONTROL_MD)
         edit_btn.setFixedWidth(SIZE_BTN_W_80)
@@ -278,11 +288,94 @@ class RuleDetailPanel(QWidget):
         lay.addLayout(
             make_manager_footer_layout(
                 left_widget=del_btn,
-                right_widgets=[close_btn, edit_btn],
+                right_widgets=[close_btn, simulate_btn, edit_btn],
                 margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
                 spacing=SPACE_SM,
             )
         )
+
+    def open_simulation(self):
+        if self._rule_id is None or self._rule is None:
+            self._build_empty()
+            return
+        self._clear()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(SPACE_XL, SPACE_LG, SPACE_XL, SPACE_LG)
+        lay.setSpacing(SPACE_MD)
+
+        title = QLabel(f"Simulate: {self._rule.get('name', 'Rule')}")
+        title.setStyleSheet(f"color:{_TEXT_PRI};font-size:{FONT_SIZE_BODY}px;font-weight:{FONT_WEIGHT_BOLD};")
+        lay.addWidget(title)
+
+        hint = QLabel("Choose a recent detection log and run this rule against its stored payload.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color:{_TEXT_SEC};font-size:{FONT_SIZE_LABEL}px;")
+        lay.addWidget(hint)
+
+        log_combo = QComboBox()
+        log_combo.setMinimumHeight(SIZE_CONTROL_MD)
+        for log in db.get_detection_logs(limit=50):
+            label = f"#{log['id']} - {log.get('timestamp', '')} - {log.get('identity', 'Unknown')}"
+            log_combo.addItem(label, log)
+        lay.addWidget(log_combo)
+
+        result_label = QLabel("No simulation run yet.")
+        result_label.setWordWrap(True)
+        result_label.setStyleSheet(f"color:{_TEXT_MUTED};font-size:{FONT_SIZE_LABEL}px;padding:{SPACE_10}px 0;")
+        lay.addWidget(result_label)
+
+        def run_sim():
+            log_data = log_combo.currentData()
+            if log_data is None:
+                result_label.setText("No detection logs are available.")
+                return
+            detections = log_data.get("detections", "{}")
+            if isinstance(detections, str):
+                try:
+                    detections = json.loads(detections or "{}")
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    detections = {}
+
+            obj_boxes = []
+            for key, val in (detections or {}).items():
+                if key in ("identity", "gender"):
+                    continue
+                if isinstance(val, bool):
+                    if val:
+                        obj_boxes.append({"class_name": key})
+                elif isinstance(val, (int, float)):
+                    obj_boxes.extend({"class_name": key} for _ in range(max(0, int(val))))
+
+            passed, details = self._rules_service.simulate_rule(
+                self._rule_id,
+                {"detections": detections, "object_bboxes": obj_boxes},
+            )
+            text = f"Result: {'TRIGGERED' if passed else 'NOT TRIGGERED'}\n\n"
+            text += "\n".join(details) if isinstance(details, list) else str(details)
+            result_label.setText(text)
+            result_label.setStyleSheet(
+                f"color:{_SUCCESS if passed else _DANGER};font-size:{FONT_SIZE_LABEL}px;padding:{SPACE_10}px 0;"
+            )
+
+        lay.addStretch()
+        run_btn = QPushButton("Run")
+        run_btn.setFixedHeight(SIZE_CONTROL_MD)
+        run_btn.setFixedWidth(SIZE_BTN_W_80)
+        run_btn.setStyleSheet(_TEXT_BTN_BLUE)
+        run_btn.clicked.connect(run_sim)
+
+        back_btn = QPushButton("Back")
+        back_btn.setFixedHeight(SIZE_CONTROL_MD)
+        back_btn.setFixedWidth(SIZE_BTN_W_80)
+        back_btn.setStyleSheet(_TEXT_BTN_GHOST)
+        back_btn.clicked.connect(lambda: self.load_rule(self._rule))
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.setSpacing(SPACE_SM)
+        btn_row.addWidget(run_btn)
+        btn_row.addWidget(back_btn)
+        lay.addLayout(btn_row)
 
     def _open_edit(self):
         if self._rule is None:

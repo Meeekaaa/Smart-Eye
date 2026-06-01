@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
+from frontend.services.camera_service import CameraService
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.styles._colors import (
     _ACCENT_BG_12,
@@ -40,7 +41,6 @@ from frontend.ui_tokens import (
     SIZE_CONTROL_MID,
     SIZE_PANEL_SM,
     SIZE_PANEL_W_MD,
-    SPACE_6,
     SPACE_MD,
     SPACE_XS,
 )
@@ -166,6 +166,14 @@ class CameraCard(QFrame):
 
     def _build(self, cam: dict, is_active: bool):
         enabled = bool(cam.get("enabled"))
+        running = False
+        try:
+            from backend.camera.camera_manager import get_camera_manager
+
+            thread = get_camera_manager().get_thread(cam["id"])
+            running = bool(thread and thread.isRunning())
+        except (ImportError, RuntimeError, AttributeError, TypeError, OSError):
+            running = False
         face_on = bool(cam.get("face_recognition"))
         try:
             plugins = db.get_camera_plugins(cam["id"])
@@ -197,9 +205,10 @@ class CameraCard(QFrame):
 
         right_pills: list[QLabel] = []
         if enabled:
-            right_pills.append(_pill("LIVE", _SUCCESS, _SUCCESS_BG_14))
+            right_pills.append(_pill("ENABLED", _SUCCESS, _SUCCESS_BG_14))
         else:
-            right_pills.append(_pill("OFF", _TEXT_MUTED, _MUTED_BG_10))
+            right_pills.append(_pill("DISABLED", _TEXT_MUTED, _MUTED_BG_10))
+        right_pills.append(_pill("RUNNING" if running else "STOPPED", _SUCCESS if running else _TEXT_MUTED, _SUCCESS_BG_14 if running else _MUTED_BG_10))
         if face_on:
             right_pills.append(_pill("FACE", _ACCENT_HI, _ACCENT_BG_12))
         if plugins:
@@ -215,19 +224,9 @@ class CameraCard(QFrame):
 
     def _on_toggle(self, cam_id: int, enabled: bool):
         try:
-            db.update_camera(cam_id, enabled=1 if enabled else 0)
-        except (OSError, ValueError):
+            CameraService().set_enabled(cam_id, enabled)
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             logger.warning("Failed to update camera enabled state cam_id=%s", cam_id, exc_info=True)
-        try:
-            from backend.camera.camera_manager import get_camera_manager
-
-            cm = get_camera_manager()
-            if enabled:
-                cm.start_camera(cam_id)
-            else:
-                cm.stop_camera(cam_id)
-        except (ImportError, RuntimeError, OSError):
-            logger.exception("Failed to toggle camera %s", cam_id)
         if self._on_toggle_changed:
             self._on_toggle_changed()
 

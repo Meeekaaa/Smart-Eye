@@ -26,7 +26,6 @@ from frontend.styles._colors import (
     _BG_BASE_92,
     _BG_NAV_ALT,
     _BG_NAV_DARK,
-    _BG_SIDEBAR_ALT,
     _BG_SIDEBAR_START,
     _MUTED_BORDER_60,
     _TEXT_MUTED,
@@ -37,11 +36,10 @@ from frontend.styles._colors import (
     _WHITE_03,
     _WHITE_04,
 )
-from frontend.styles._shadows import apply_shadow_float
-from frontend.styles.page_styles import muted_label_style, text_style, transparent_surface_style
+from frontend.styles._shadows import apply_shadow_float, apply_shadow_glow
+from frontend.styles.page_styles import muted_label_style, text_style
 from frontend.ui_tokens import (
     FONT_SIZE_15,
-    FONT_SIZE_19,
     FONT_SIZE_9,
     FONT_SIZE_CAPTION,
     FONT_SIZE_LABEL,
@@ -422,7 +420,7 @@ class SidebarWidget(QWidget):
             QWidget {{
                 background: {bg0};
             }}
-        """.format(bg0=_BG_SIDEBAR, bg1=_BG_SIDEBAR_ALT))
+        """.format(bg0=_BG_SIDEBAR))
 
         self._width_anim = QPropertyAnimation(self, b"minimumWidth", self)
         self._width_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -608,10 +606,6 @@ class SidebarWidget(QWidget):
         self._ver_lbl_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def _on_nav_clicked(self, key: str):
-        try:
-            print(f"NAV_CLICK: {key}")
-        except (RuntimeError, OSError):
-            pass
         self._on_navigate(key)
 
     def set_active(self, key: str):
@@ -633,7 +627,7 @@ class SidebarWidget(QWidget):
             QWidget {{
                 background: {bg0};
             }}
-        """.format(bg0=_BG_SIDEBAR, bg1=_BG_SIDEBAR_ALT)
+        """.format(bg0=_BG_SIDEBAR)
         )
 
         if self._top_divider is not None:
@@ -804,4 +798,8 @@ class SidebarWidget(QWidget):
             btn.expand(expanded)
 
     def _on_anim_finished(self):
-        pass
+        target = _SIDEBAR_EXPANDED if self._expanded else _SIDEBAR_COLLAPSED
+        self.setMinimumWidth(target)
+        self.setMaximumWidth(target)
+        if self._pending_expanded != self._expanded:
+            self._set_expanded(self._pending_expanded)

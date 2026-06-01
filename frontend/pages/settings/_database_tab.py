@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import math
@@ -102,6 +102,7 @@ from frontend.ui_tokens import (
 
 from ._constants import (
     _FIELD_H,
+    _DANGER_BTN,
     _PRIMARY_BTN,
     _SECONDARY_BTN,
     _combo_ss,
@@ -753,6 +754,13 @@ class DatabaseTab(QWidget):
         backup_btn.setToolTip("Save a copy of the database to a chosen location.")
         backup_btn.clicked.connect(self._backup_db)
         hl.addWidget(backup_btn)
+
+        purge_btn = QPushButton("Purge Operational Data")
+        purge_btn.setStyleSheet(_DANGER_BTN)
+        purge_btn.setMinimumWidth(SIZE_LABEL_W_180)
+        purge_btn.setToolTip("Admin-confirmed purge for cameras, faces, rules, events, logs, and media indexes.")
+        purge_btn.clicked.connect(self._on_faucet_clicked)
+        hl.addWidget(purge_btn)
 
         hl.addStretch()
         return card

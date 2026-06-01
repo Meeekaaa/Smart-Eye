@@ -35,28 +35,37 @@ class CameraThread(QThread):
         self._fps = 0.0
         self._last_fps_time = 0
         self._infer_interval = _DEFAULT_INFER_INTERVAL
+        self._base_infer_interval = _DEFAULT_INFER_INTERVAL
+        self._adaptive_infer_interval = True
+        self._infer_interval_min = _DEFAULT_INFER_INTERVAL
+        self._infer_interval_max = 3
         self._raw_source = source
         self._is_twitch = "twitch.tv/" in str(source)
         self._last_inbox_save_ts = 0.0
         self._recent_inbox_embs: list[tuple[float, np.ndarray]] = []
         self._inbox_enabled = False
         self._suppress_errors = False
-        self._clip_enabled = True
+        self._clip_enabled = False
         self._clip_seconds = 5
         self._clip_buffer: collections.deque[tuple[float, np.ndarray]] = collections.deque()
+        self._clip_buffer_bytes = 0
+        self._clip_max_buffer_bytes = 128 * 1024 * 1024
+        self._clip_buffer_max_dim = 640
         self._last_clip_ts = 0.0
         self._clip_recent: dict[tuple[str, tuple[str, ...]], float] = {}
         self._clip_min_interval = 10.0
         self._clip_repeat_window = 60.0
-        self._infer_dim = 384
-        self._infer_dim_min = 256
-        self._infer_dim_max = 512
+        self._ui_frame_interval_sec = 1.0 / 15.0
+        self._last_frame_emit_ts = 0.0
+        self._infer_dim = 640
+        self._infer_dim_min = 384
+        self._infer_dim_max = 768
         self._adaptive_infer_dim = True
         self._infer_tune_counter = 0
         self._last_inference_ts = 0.0
-        self._predict_frames_since_infer = 0
-        self._max_predict_frames = 0
-        self._max_predict_staleness_sec = 0.08
+        self._inference_count = 0
+        self._infer_fps = 0.0
+        self._last_infer_fps_time = 0.0
 
     @property
     def camera_id(self):
@@ -67,7 +76,8 @@ class CameraThread(QThread):
         return self._fps
 
     def set_inference_interval(self, n: int):
-        self._infer_interval = max(1, n)
+        self._base_infer_interval = max(1, int(n or 1))
+        self._infer_interval = self._base_infer_interval
 
     @staticmethod
     def _parse_resolution_text(value):
@@ -122,102 +132,7 @@ class CameraThread(QThread):
             except Exception:
                 pass
 
-    @staticmethod
-    def _clip_bbox(bbox, frame_w, frame_h):
-        if not bbox or len(bbox) != 4:
-            return bbox
-        x1, y1, x2, y2 = [int(v) for v in bbox]
-        x1 = max(0, min(frame_w - 1, x1))
-        y1 = max(0, min(frame_h - 1, y1))
-        x2 = max(1, min(frame_w, x2))
-        y2 = max(1, min(frame_h, y2))
-        if x2 <= x1:
-            x2 = min(frame_w, x1 + 1)
-        if y2 <= y1:
-            y2 = min(frame_h, y1 + 1)
-        return [x1, y1, x2, y2]
-
-    @staticmethod
-    def _propagate_entity_bbox(entity: dict, frame_w: int, frame_h: int, damping: float, max_step: float):
-        bbox = entity.get("bbox")
-        if not bbox:
-            return
-        try:
-            vx = float(entity.get("track_vx", 0.0) or 0.0)
-            vy = float(entity.get("track_vy", 0.0) or 0.0)
-        except Exception:
-            vx = 0.0
-            vy = 0.0
-        if abs(vx) < 0.15 and abs(vy) < 0.15:
-            return
-
-        bw = max(1.0, float(bbox[2] - bbox[0]))
-        bh = max(1.0, float(bbox[3] - bbox[1]))
-        size_scale = max(0.70, min(1.90, max(bw, bh) / 140.0))
-        eff_step = max_step * size_scale
-
-        vx = max(-eff_step, min(eff_step, vx))
-        vy = max(-eff_step, min(eff_step, vy))
-        pb = [
-            int(bbox[0] + vx),
-            int(bbox[1] + vy),
-            int(bbox[2] + vx),
-            int(bbox[3] + vy),
-        ]
-        entity["bbox"] = CameraThread._clip_bbox(pb, frame_w, frame_h)
-        entity["track_vx"] = vx * damping
-        entity["track_vy"] = vy * damping
-
-    def _propagation_profile(self) -> tuple[float, float, float, float]:
-        effective_fps = float(self._fps) if self._fps and self._fps > 1.0 else float(self._fps_limit or 30)
-        effective_fps = max(8.0, min(60.0, effective_fps))
-        fps_scale = max(0.75, min(2.20, 30.0 / effective_fps))
-
-        if effective_fps >= 35.0:
-            face_damping, obj_damping = 0.76, 0.74
-        elif effective_fps >= 24.0:
-            face_damping, obj_damping = 0.80, 0.78
-        else:
-            face_damping, obj_damping = 0.84, 0.82
-
-
-        face_max_step = 10.0 * fps_scale
-        obj_max_step = 14.0 * fps_scale
-        return face_damping, obj_damping, face_max_step, obj_max_step
-
-    def _propagate_live_state(self, frame_w: int, frame_h: int):
-        if not self._last_state:
-            return
-
-        face_damping, obj_damping, face_max_step, obj_max_step = self._propagation_profile()
-
-        for face in self._last_state.get("all_faces", []):
-            self._propagate_entity_bbox(face, frame_w, frame_h, damping=face_damping, max_step=face_max_step)
-
-        for obj in self._last_state.get("object_bboxes", []):
-            self._propagate_entity_bbox(obj, frame_w, frame_h, damping=obj_damping, max_step=obj_max_step)
-
-        face_candidates = [f for f in self._last_state.get("all_faces", []) if f.get("bbox")]
-        if face_candidates:
-            best_face = max(face_candidates, key=lambda f: float(f.get("confidence", 0.0) or 0.0))
-            self._last_state["face_bbox"] = list(best_face["bbox"])
-
-    def _dampen_live_state_velocity(self):
-        if not self._last_state:
-            return
-        for face in self._last_state.get("all_faces", []):
-            with contextlib.suppress(Exception):
-                face["track_vx"] = float(face.get("track_vx", 0.0) or 0.0) * 0.25
-                face["track_vy"] = float(face.get("track_vy", 0.0) or 0.0) * 0.25
-        for obj in self._last_state.get("object_bboxes", []):
-            with contextlib.suppress(Exception):
-                obj["track_vx"] = float(obj.get("track_vx", 0.0) or 0.0) * 0.25
-                obj["track_vy"] = float(obj.get("track_vy", 0.0) or 0.0) * 0.25
-
     def _tune_infer_dim(self, result: dict):
-        if not self._adaptive_infer_dim:
-            return
-
         self._infer_tune_counter += 1
         if self._infer_tune_counter % 5 != 0:
             return
@@ -232,15 +147,107 @@ class CameraThread(QThread):
         if infer_ms <= 0.0:
             return
 
-        target_budget_ms = 1000.0 / max(8.0, float(self._fps_limit or 30))
-        upper = target_budget_ms * 1.35
-        lower = target_budget_ms * 0.70
+        if self._adaptive_infer_dim:
+            target_budget_ms = (1000.0 / max(8.0, float(self._fps_limit or 30))) * max(1, int(self._infer_interval or 1))
+            upper = target_budget_ms * 1.35
+            lower = target_budget_ms * 0.70
 
-        current_dim = int(self._infer_dim)
-        if infer_ms > upper and current_dim > self._infer_dim_min:
-            self._infer_dim = max(self._infer_dim_min, int(current_dim * 0.92))
-        elif infer_ms < lower and current_dim < self._infer_dim_max:
-            self._infer_dim = min(self._infer_dim_max, int(current_dim * 1.05))
+            current_dim = int(self._infer_dim)
+            if infer_ms > upper and current_dim > self._infer_dim_min:
+                self._infer_dim = max(self._infer_dim_min, int(current_dim * 0.92))
+            elif infer_ms < lower and current_dim < self._infer_dim_max:
+                self._infer_dim = min(self._infer_dim_max, int(current_dim * 1.05))
+
+        if not self._adaptive_infer_interval:
+            return
+
+        current_interval = max(1, int(self._infer_interval or 1))
+        frame_budget_ms = 1000.0 / max(8.0, float(self._fps_limit or 30))
+        interval_budget_ms = frame_budget_ms * current_interval
+        if infer_ms > interval_budget_ms * 1.25 and current_interval < self._infer_interval_max:
+            self._infer_interval = min(self._infer_interval_max, current_interval + 1)
+        elif infer_ms < interval_budget_ms * 0.42 and current_interval > self._infer_interval_min:
+            self._infer_interval = max(self._infer_interval_min, current_interval - 1)
+
+    @staticmethod
+    def _clone_display_entry(entry: dict) -> dict:
+        cloned = dict(entry)
+        bbox = cloned.get("bbox")
+        if bbox and len(bbox) == 4:
+            cloned["bbox"] = [int(round(float(v))) for v in bbox]
+        return cloned
+
+    @staticmethod
+    def _predict_bbox_for_display(bbox, entry, lead_sec, frame_w, frame_h):
+        if not bbox or len(bbox) != 4 or lead_sec <= 0.0:
+            return bbox
+        try:
+            vx = float(entry.get("track_vx_sec", 0.0) or 0.0)
+            vy = float(entry.get("track_vy_sec", 0.0) or 0.0)
+        except Exception:
+            return bbox
+        if vx == 0.0 and vy == 0.0:
+            return bbox
+
+        try:
+            x1 = float(bbox[0]) + (vx * lead_sec)
+            y1 = float(bbox[1]) + (vy * lead_sec)
+            x2 = float(bbox[2]) + (vx * lead_sec)
+            y2 = float(bbox[3]) + (vy * lead_sec)
+            x1 = max(0.0, min(float(frame_w - 1), x1))
+            y1 = max(0.0, min(float(frame_h - 1), y1))
+            x2 = max(0.0, min(float(frame_w - 1), x2))
+            y2 = max(0.0, min(float(frame_h - 1), y2))
+            if x2 - x1 < 2.0 or y2 - y1 < 2.0:
+                return bbox
+            return [int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))]
+        except Exception:
+            return bbox
+
+    def _predict_display_state(self, state: dict, now_ts: float, frame_w: int, frame_h: int) -> dict:
+        if not state:
+            return {}
+
+        display_state = dict(state)
+        try:
+            source_ts = float(display_state.get("_state_ts", 0.0) or 0.0)
+        except Exception:
+            source_ts = 0.0
+        if source_ts <= 0.0:
+            return display_state
+
+        base_lead = max(0.0, now_ts - source_ts)
+        max_lead = 0.30
+
+        def _predict_entry(entry):
+            cloned = self._clone_display_entry(entry)
+            try:
+                entry_ts = float(entry.get("track_ts", 0.0) or source_ts)
+            except Exception:
+                entry_ts = source_ts
+            lead = max(base_lead, now_ts - entry_ts)
+            if cloned.get("_coasted"):
+                lead = min(lead, 0.14)
+            else:
+                lead = min(lead, max_lead)
+            cloned["bbox"] = self._predict_bbox_for_display(cloned.get("bbox"), cloned, lead, frame_w, frame_h)
+            return cloned
+
+        faces = [_predict_entry(f) for f in display_state.get("all_faces", [])]
+        if faces:
+            display_state["all_faces"] = faces
+
+        objects = [_predict_entry(o) for o in display_state.get("object_bboxes", [])]
+        if objects:
+            display_state["object_bboxes"] = objects
+
+        if display_state.get("face_bbox") and display_state.get("all_faces"):
+            old_box = state.get("face_bbox")
+            for original, predicted in zip(state.get("all_faces", []), display_state.get("all_faces", []), strict=False):
+                if original.get("bbox") == old_box:
+                    display_state["face_bbox"] = predicted.get("bbox")
+                    break
+        return display_state
 
     def run(self):
         self._running = True
@@ -252,37 +259,55 @@ class CameraThread(QThread):
             configured_backends = db.get_setting("capture_backends", None)
             twitch_enabled = db.get_bool("twitch_enabled", False)
             self._inbox_enabled = db.get_bool("inbox_capture_enabled", False)
-            self._clip_enabled = db.get_bool("live_clip_enabled", True)
+            self._clip_enabled = db.get_bool("live_clip_enabled", False)
             self._clip_seconds = int(db.get_int("live_clip_seconds", 5) or 5)
+            self._clip_max_buffer_bytes = max(8, int(db.get_int("live_clip_max_buffer_mb", 128) or 128)) * 1024 * 1024
+            self._clip_buffer_max_dim = max(160, int(db.get_int("live_clip_buffer_max_dim", 640) or 640))
             self._clip_min_interval = float(db.get_float("live_clip_min_interval_sec", 10.0) or 10.0)
             self._clip_repeat_window = float(db.get_float("live_clip_repeat_window_sec", 60.0) or 60.0)
-            self._max_predict_frames = max(0, int(db.get_int("bbox_predict_max_frames", 0) or 0))
-            self._max_predict_staleness_sec = max(0.01, float(db.get_float("bbox_predict_max_stale_sec", 0.08) or 0.08))
+            ui_fps = max(1.0, min(60.0, float(db.get_float("ui_live_render_fps", 15.0) or 15.0)))
+            self._ui_frame_interval_sec = 1.0 / ui_fps
+            self._adaptive_infer_interval = db.get_bool("adaptive_live_infer_interval", True)
+            self._infer_interval_min = max(
+                1,
+                int(db.get_int("live_infer_interval_min", self._base_infer_interval) or self._base_infer_interval),
+                int(self._base_infer_interval or 1),
+            )
+            self._infer_interval_max = max(
+                self._infer_interval_min,
+                int(db.get_int("live_infer_interval_max", 2) or 2),
+            )
+            self._infer_interval = max(self._infer_interval_min, min(int(self._infer_interval or 1), self._infer_interval_max))
         except Exception:
             configured_prefixes = None
             http_as_live = False
             configured_backends = None
             twitch_enabled = False
             self._inbox_enabled = False
-            self._clip_enabled = True
+            self._clip_enabled = False
             self._clip_seconds = 5
+            self._clip_max_buffer_bytes = 128 * 1024 * 1024
+            self._clip_buffer_max_dim = 640
             self._clip_min_interval = 10.0
             self._clip_repeat_window = 60.0
-            self._max_predict_frames = 0
-            self._max_predict_staleness_sec = 0.08
+            self._ui_frame_interval_sec = 1.0 / 15.0
+            self._adaptive_infer_interval = True
+            self._infer_interval_min = max(1, int(self._base_infer_interval or 1))
+            self._infer_interval_max = max(self._infer_interval_min, 3)
+            self._infer_interval = self._infer_interval_min
 
         try:
-            self._infer_dim = int(db.get_int("live_infer_dim", 384) or 384)
-            self._infer_dim_min = int(db.get_int("live_infer_dim_min", 256) or 256)
-            self._infer_dim_max = int(db.get_int("live_infer_dim_max", 512) or 512)
+            self._infer_dim = int(db.get_int("live_infer_dim", 640) or 640)
+            self._infer_dim_min = int(db.get_int("live_infer_dim_min", 384) or 384)
+            self._infer_dim_max = int(db.get_int("live_infer_dim_max", 768) or 768)
             self._adaptive_infer_dim = bool(db.get_bool("adaptive_live_infer_dim", True))
         except Exception:
-            self._infer_dim = 384
-            self._infer_dim_min = 256
-            self._infer_dim_max = 512
+            self._infer_dim = 640
+            self._infer_dim_min = 384
+            self._infer_dim_max = 768
             self._adaptive_infer_dim = True
 
-        self._infer_dim_min = max(160, int(self._infer_dim_min))
+        self._infer_dim_min = max(256, int(self._infer_dim_min))
         self._infer_dim_max = max(self._infer_dim_min, int(self._infer_dim_max))
         self._infer_dim = max(self._infer_dim_min, min(self._infer_dim_max, int(self._infer_dim)))
 
@@ -381,6 +406,9 @@ class CameraThread(QThread):
         display_delay = 1.0 / max(self._fps_limit, 1)
         self._last_fps_time = time.time()
         self._frame_count = 0
+        self._last_infer_fps_time = self._last_fps_time
+        self._inference_count = 0
+        self._infer_fps = 0.0
 
         is_file = not str(self._source).isdigit() and not any(str(self._source).startswith(p) for p in live_prefixes)
         consecutive_failures = 0
@@ -390,7 +418,7 @@ class CameraThread(QThread):
         sec_last_face_ms = 0.0
         sec_last_obj_ms = 0.0
 
-        def _do_inference(infer_frame, cid, fw, fh, infer_scale=1.0):
+        def _do_inference(infer_frame, cid, fw, fh, infer_scale=1.0, source_ts=None):
             try:
                 t0 = time.time()
                 det = detector.process_frame(infer_frame, cid)
@@ -412,10 +440,16 @@ class CameraThread(QThread):
                 primary["_infer_ms"] = infer_ms
                 primary["_face_ms"] = float(det.get("face_time_ms", 0.0) or 0.0)
                 primary["_object_ms"] = float(det.get("object_time_ms", 0.0) or 0.0)
+                primary["_source_ts"] = float(source_ts or time.time())
                 return primary
             except Exception:
                 logging.getLogger(__name__).warning("_do_inference failed for camera %s", cid, exc_info=True)
-                return {"_triggered": [], "_fw": fw, "_fh": fh}
+                return {
+                    "_triggered": [],
+                    "_fw": fw,
+                    "_fh": fh,
+                    "_source_ts": float(source_ts or time.time()),
+                }
 
         def _handle_inference_result(result, frame, fallback_fw, fallback_fh):
             triggered = result.pop("_triggered", [])
@@ -424,6 +458,7 @@ class CameraThread(QThread):
             infer_ms = float(result.pop("_infer_ms", 0.0) or 0.0)
             face_ms = float(result.pop("_face_ms", 0.0) or 0.0)
             object_ms = float(result.pop("_object_ms", 0.0) or 0.0)
+            source_ts = float(result.pop("_source_ts", time.time()) or time.time())
             result["_triggered"] = triggered
             result = pipeline.handle_result(
                 result,
@@ -434,9 +469,15 @@ class CameraThread(QThread):
                 enable_heatmap=get_service_manager().is_active("heatmap_generation"),
                 inbox_context=self,
             )
+            result["_state_ts"] = source_ts
             self._last_state = result
             self._last_inference_ts = time.time()
-            self._predict_frames_since_infer = 0
+            self._inference_count += 1
+            infer_fps_elapsed = self._last_inference_ts - self._last_infer_fps_time
+            if infer_fps_elapsed >= 1.0:
+                self._infer_fps = self._inference_count / infer_fps_elapsed
+                self._inference_count = 0
+                self._last_infer_fps_time = self._last_inference_ts
             nonlocal sec_last_infer_ms, sec_last_face_ms, sec_last_obj_ms
             sec_last_infer_ms = infer_ms
             sec_last_face_ms = face_ms
@@ -467,6 +508,7 @@ class CameraThread(QThread):
                         self._last_clip_ts = time.time()
 
         def _submit_inference(frame, fw, fh):
+            source_ts = time.time()
             _INFER_DIM = int(self._infer_dim)
             _max_side = max(fw, fh)
             if _max_side > _INFER_DIM:
@@ -475,7 +517,15 @@ class CameraThread(QThread):
             else:
                 _infer_frame = frame.copy()
                 _pre = 1.0
-            return executor.submit(_do_inference, _infer_frame, self._camera_id, fw, fh, _pre)
+            return executor.submit(
+                _do_inference,
+                _infer_frame,
+                self._camera_id,
+                fw,
+                fh,
+                _pre,
+                source_ts,
+            )
 
         while self._running:
             t_start = time.time()
@@ -515,18 +565,14 @@ class CameraThread(QThread):
             self._suppress_errors = False
             frame_num += 1
             fh, fw = frame.shape[:2]
-            inference_updated = False
             if self._clip_enabled:
                 now_buf = time.time()
-                self._clip_buffer.append((now_buf, frame.copy()))
-                while self._clip_buffer and (now_buf - self._clip_buffer[0][0] > max(1, self._clip_seconds)):
-                    self._clip_buffer.popleft()
+                self._append_clip_frame(frame, now_buf)
 
             if pending_future is not None and pending_future.done():
                 try:
                     result = pending_future.result(timeout=0)
                     _handle_inference_result(result, frame, fw, fh)
-                    inference_updated = True
                 except Exception:
                     logging.getLogger(__name__).exception("Inference result handling failed for camera %s", self._camera_id)
                 pending_future = None
@@ -535,19 +581,6 @@ class CameraThread(QThread):
             if should_try_schedule:
                 pending_future = _submit_inference(frame, fw, fh)
 
-            if not inference_updated:
-                now_infer = time.time()
-                allow_predict = (
-                    self._last_inference_ts > 0.0
-                    and (now_infer - self._last_inference_ts) <= self._max_predict_staleness_sec
-                    and self._predict_frames_since_infer < self._max_predict_frames
-                )
-                if allow_predict:
-                    self._propagate_live_state(fw, fh)
-                    self._predict_frames_since_infer += 1
-                else:
-                    self._dampen_live_state_velocity()
-
             self._frame_count += 1
             now = time.time()
             if now - self._last_fps_time >= 1.0:
@@ -555,8 +588,18 @@ class CameraThread(QThread):
                 self._frame_count = 0
                 self._last_fps_time = now
                 self.fps_updated.emit(self._camera_id, self._fps)
+            if self._last_inference_ts > 0.0 and now - self._last_inference_ts >= 2.0:
+                self._infer_fps = 0.0
+                self._inference_count = 0
+                self._last_infer_fps_time = now
 
-            self.frame_ready.emit(self._camera_id, frame, dict(self._last_state))
+            if now - self._last_frame_emit_ts >= self._ui_frame_interval_sec:
+                self._last_frame_emit_ts = now
+                display_state = self._predict_display_state(self._last_state, now, fw, fh)
+                display_state["_capture_fps"] = self._fps
+                display_state["_infer_fps"] = self._infer_fps
+                display_state["_infer_interval"] = int(self._infer_interval or 1)
+                self.frame_ready.emit(self._camera_id, frame, display_state)
 
             elapsed = time.time() - t_start
             sleep_time = display_delay - elapsed
@@ -574,8 +617,35 @@ class CameraThread(QThread):
     def clear_last_state(self):
         self._last_state = {}
 
+    def _prepare_clip_frame(self, frame):
+        max_dim = int(self._clip_buffer_max_dim or 0)
+        if max_dim <= 0:
+            return frame.copy()
+        h, w = frame.shape[:2]
+        largest = max(h, w)
+        if largest <= max_dim:
+            return frame.copy()
+        scale = max_dim / float(largest)
+        return cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))))
+
+    def _append_clip_frame(self, frame, now_ts: float):
+        clip_frame = self._prepare_clip_frame(frame)
+        frame_bytes = int(getattr(clip_frame, "nbytes", 0) or 0)
+        self._clip_buffer.append((now_ts, clip_frame))
+        self._clip_buffer_bytes += frame_bytes
+        max_age = max(1, self._clip_seconds)
+        while self._clip_buffer and (
+            now_ts - self._clip_buffer[0][0] > max_age
+            or self._clip_buffer_bytes > self._clip_max_buffer_bytes
+        ):
+            _, old = self._clip_buffer.popleft()
+            self._clip_buffer_bytes -= int(getattr(old, "nbytes", 0) or 0)
+
     def _save_clip_from_buffer(self) -> str | None:
         try:
+            if not db.can_persist_events():
+                logging.getLogger(__name__).warning("Live clip skipped: database size limit is reached")
+                return None
             os.makedirs("data/clips_live", exist_ok=True)
             frames = list(self._clip_buffer)
             if not frames:

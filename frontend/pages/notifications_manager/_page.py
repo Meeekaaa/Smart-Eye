@@ -1,12 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
-import time
 
-from PySide6.QtCore import Qt, QSettings, QEvent
-from PySide6.QtGui import QFont, QPixmap
+from PySide6.QtCore import Qt, QSettings
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication,
     QHBoxLayout,
     QLayout,
     QLabel,
@@ -16,7 +14,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +21,7 @@ from PySide6.QtWidgets import (
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles._btn_styles import _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
 from frontend.styles._input_styles import _SEARCH_INPUT
 
@@ -119,8 +117,6 @@ class NotificationsConfigPage(QWidget):
         self._active_filter = "all"
         self._tab_buttons: dict = {}
         self._tab_counts: dict = {}
-        self._suppress_popups_until = 0.0
-        QApplication.instance().installEventFilter(self)
         self._build_ui()
 
     def on_activated(self):
@@ -274,7 +270,7 @@ class NotificationsConfigPage(QWidget):
         self._smtp_panel.setStyleSheet(f"background-color: {_BG_SURFACE};")
         self._smtp_panel.close_requested.connect(self._close_right)
 
-        self._right_stack = QStackedWidget()
+        self._right_stack = AnimatedStackedWidget()
         self._right_stack.addWidget(self._profile_panel)
         self._right_stack.addWidget(self._new_profile_panel)
         self._right_stack.addWidget(self._smtp_panel)
@@ -474,27 +470,6 @@ class NotificationsConfigPage(QWidget):
             QToolTip.hideText()
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
             pass
-        self._suppress_popups_until = time.monotonic() + 0.5
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.Show and time.monotonic() < self._suppress_popups_until:
-            try:
-                if isinstance(obj, QWidget) and obj.isWindow():
-                    main_win = next(
-                        (
-                            w
-                            for w in QApplication.topLevelWidgets()
-                            if w.__class__.__name__ == "MainWindow" or w.windowTitle() == "SmartEye"
-                        ),
-                        None,
-                    )
-                    if obj is not None and obj is not main_win:
-                        obj.hide()
-                        event.ignore()
-                        return True
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                pass
-        return super().eventFilter(obj, event)
 
     def _delete_profile(self, profile_id: int):
         db.delete_notification_profile(profile_id)

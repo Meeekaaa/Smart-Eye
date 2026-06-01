@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import contextlib
 import logging
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QTextEdit,
@@ -31,7 +32,7 @@ from ._ui_builder import build_page_ui
 from ._widgets import RosterRowWidget
 from frontend.styles._btn_styles import _SECONDARY_BTN
 from frontend.styles._colors import _ACCENT_BG_22, _ACCENT_HI, _DANGER, _MUTED_BG_25, _SUCCESS
-from frontend.styles.page_styles import divider_style, muted_label_style, section_kicker_style, text_style, transparent_surface_style
+from frontend.styles.page_styles import divider_style, muted_label_style, text_style
 from frontend.ui_tokens import (
     FONT_SIZE_15,
     FONT_SIZE_9,
@@ -68,6 +69,7 @@ from frontend.ui_tokens import (
 )
 
 logger = logging.getLogger(__name__)
+_RETIRED_IMPORT_WORKERS: set[QThread] = set()
 _COUNT_BADGE_ACTIVE_STYLE = (
     f"background: {_ACCENT_BG_22}; color: {_ACCENT_HI}; "
     f"border-radius: {RADIUS_MD}px; padding: 0 {SPACE_5}px; "
@@ -91,6 +93,8 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
         self._inbox_view: list[dict] = []
         self._active_face_id: int | None = None
         self._worker = None
+        self._single_import_worker = None
+        self._batch_import_worker = None
         self._row_widgets: dict[int, RosterRowWidget] = {}
         self._active_filter: str = "all"
         self._tab_counts: dict[str, QLabel] = {}
@@ -115,16 +119,48 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
         self._refresh()
 
     def on_deactivated(self):
+        self._cleanup_import_workers()
         self._detail_panel.clear()
         self._render_roster([])
+        with contextlib.suppress(Exception):
+            self._close_enroll_panel()
         with contextlib.suppress(Exception):
             self._close_inbox_panel()
 
     def on_unload(self):
+        self._cleanup_import_workers()
         self._detail_panel.clear()
         self._render_roster([])
         with contextlib.suppress(Exception):
+            self._close_enroll_panel()
+        with contextlib.suppress(Exception):
             self._close_inbox_panel()
+
+    def _cleanup_import_workers(self) -> None:
+        for attr in ("_single_import_worker", "_batch_import_worker"):
+            worker = getattr(self, attr, None)
+            if worker is None:
+                continue
+            setattr(self, attr, None)
+            with contextlib.suppress(Exception):
+                worker.progress.disconnect()
+            with contextlib.suppress(Exception):
+                worker.finished.disconnect()
+            with contextlib.suppress(Exception):
+                worker.cancel()
+            if worker.isRunning():
+                worker.setParent(None)
+                _RETIRED_IMPORT_WORKERS.add(worker)
+
+                def _cleanup(*_args, w=worker):
+                    _RETIRED_IMPORT_WORKERS.discard(w)
+                    with contextlib.suppress(Exception):
+                        w.deleteLater()
+
+                worker.finished.connect(_cleanup)
+            else:
+                with contextlib.suppress(Exception):
+                    worker.deleteLater()
 
     def _refresh(self):
         self._all_faces = db.get_faces()
@@ -446,7 +482,6 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
             _BORDER_DIM,
             _TEXT_PRI,
             _TEXT_SEC,
-            _TEXT_MUTED,
         )
 
         dlg = QDialog(self)
@@ -560,9 +595,7 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
             self._import_batch(folder)
 
     def _import_single_person(self, folder: str):
-        import cv2
         from backend.models.model_loader import get_face_model
-        from utils.embedding_utils import embedding_to_bytes
 
         model = get_face_model()
         if model is None or not model.is_loaded:
@@ -583,35 +616,44 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
             )
             return
 
-        count, skipped = 0, 0
-        for fname in files:
-            fpath = os.path.join(folder, fname)
-            img = cv2.imread(fpath)
-            if img is None:
-                skipped += 1
-                continue
-            emb = model.get_embedding(img)
-            if emb is None:
-                skipped += 1
-                continue
-            emb_bytes = embedding_to_bytes(emb)
-            name = os.path.splitext(fname)[0].replace("_", " ").replace("-", " ").title()
-            db.add_face(
-                name,
-                "",
-                emb_bytes,
-                fpath,
-                1,
-                "[]",
-                embedding_model=getattr(model, "model_name", "") or "",
-            )
-            count += 1
+        if self._single_import_worker is not None and self._single_import_worker.isRunning():
+            QMessageBox.information(self, "Import Running", "A face import is already running.")
+            return
 
-        msg = f"Import complete.\n+ {count} faces imported."
-        if skipped:
-            msg += f"\n\u2212 {skipped} files skipped (no face detected or unreadable)."
-        QMessageBox.information(self, "Import Results", msg)
-        self._refresh()
+        progress = QProgressDialog("Importing face images...", "Cancel", 0, len(files), self)
+        progress.setWindowTitle("Import Faces")
+        progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        worker = _SinglePersonImportWorker(folder, files)
+        self._single_import_worker = worker
+
+        def _on_progress(done: int, message: str):
+            progress.setValue(done)
+            progress.setLabelText(message)
+
+        def _on_done(ok: bool, msg: str):
+            self._single_import_worker = None
+            progress.close()
+            worker.deleteLater()
+            if ok:
+                QMessageBox.information(self, "Import Results", msg)
+                self._refresh()
+                with contextlib.suppress(Exception):
+                    from backend.models.model_loader import get_face_model
+
+                    fm = get_face_model()
+                    if fm:
+                        fm.invalidate_known_cache()
+            else:
+                QMessageBox.warning(self, "Import Failed", msg)
+
+        progress.canceled.connect(worker.cancel)
+        worker.progress.connect(_on_progress)
+        worker.finished.connect(_on_done)
+        worker.start()
+        progress.show()
 
     def _import_batch(self, folder: str):
         from ._constants import (
@@ -619,7 +661,6 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
             _BORDER_DIM,
             _TEXT_PRI,
             _TEXT_SEC,
-            _TEXT_MUTED,
             _ACCENT,
             _STYLESHEET,
         )
@@ -679,17 +720,27 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
         )
         vl.addWidget(log, stretch=1)
 
-        close_btn = QPushButton("Close")
+        worker = _BatchImportWorker(folder)
+        self._batch_import_worker = worker
+        done_state = {"done": False}
+
+        close_btn = QPushButton("Cancel")
         close_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        close_btn.setEnabled(False)
         close_btn.setStyleSheet(_SECONDARY_BTN)
-        close_btn.clicked.connect(dlg.accept)
+
+        def _cancel_or_close():
+            if done_state["done"]:
+                dlg.accept()
+                return
+            worker.cancel()
+            close_btn.setEnabled(False)
+            log.append("Canceling import...")
+
+        close_btn.clicked.connect(_cancel_or_close)
         close_row = QHBoxLayout()
         close_row.addStretch()
         close_row.addWidget(close_btn)
         vl.addLayout(close_row)
-
-        worker = _BatchImportWorker(folder)
 
         def _on_progress(pct, msg):
             prog_bar.setValue(pct)
@@ -697,12 +748,17 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
             log.append(msg)
 
         def _on_done(ok, msg):
+            done_state["done"] = True
+            self._batch_import_worker = None
             close_btn.setEnabled(True)
+            close_btn.setText("Close")
             color = _SUCCESS if ok else _DANGER
             log.append(f"<span style='color:{color}'><b>{'✓' if ok else '✗'} {msg}</b></span>")
             prog_bar.setValue(100 if ok else prog_bar.value())
             prog_lbl.setText("Done" if ok else "Failed")
             worker.deleteLater()
+            if not ok:
+                return
             self._refresh()
             try:
                 from backend.models.model_loader import get_face_model
@@ -719,6 +775,72 @@ class FaceManagerPage(_EnrollPanelMixin, QWidget):
         dlg.exec()
 
 
+class _SinglePersonImportWorker(QThread):
+    progress = Signal(int, str)
+    finished = Signal(bool, str)
+
+    def __init__(self, folder: str, files: list[str], parent=None):
+        super().__init__(parent)
+        self._folder = folder
+        self._files = files
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
+    def run(self):
+        try:
+            import cv2
+            from backend.repository import db
+            from backend.models.model_loader import get_face_model
+            from utils.embedding_utils import embedding_to_bytes
+
+            model = get_face_model()
+            if model is None or not model.is_loaded:
+                self.finished.emit(False, "Face model is not loaded.")
+                return
+
+            count, skipped = 0, 0
+            total = max(1, len(self._files))
+            for idx, fname in enumerate(self._files, 1):
+                if self._cancel_requested:
+                    self.finished.emit(False, f"Import canceled. Imported {count} face(s), skipped {skipped}.")
+                    return
+                fpath = os.path.join(self._folder, fname)
+                self.progress.emit(idx - 1, f"Processing {fname}...")
+                img = cv2.imread(fpath)
+                if img is None:
+                    skipped += 1
+                    self.progress.emit(idx, f"Skipped {fname} (unreadable)")
+                    continue
+                emb = model.get_embedding(img)
+                if emb is None:
+                    skipped += 1
+                    self.progress.emit(idx, f"Skipped {fname} (no face detected)")
+                    continue
+                emb_bytes = embedding_to_bytes(emb)
+                name = os.path.splitext(fname)[0].replace("_", " ").replace("-", " ").title()
+                db.add_face(
+                    name,
+                    "",
+                    emb_bytes,
+                    fpath,
+                    1,
+                    "[]",
+                    embedding_model=getattr(model, "model_name", "") or "",
+                )
+                count += 1
+                self.progress.emit(idx, f"Imported {name} ({idx}/{total})")
+
+            msg = f"Import complete.\n+ {count} faces imported."
+            if skipped:
+                msg += f"\n- {skipped} files skipped (no face detected or unreadable)."
+            self.finished.emit(True, msg)
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
+            logger.exception("Single-person face import failed")
+            self.finished.emit(False, str(exc))
+
+
 class _BatchImportWorker(QThread):
     progress = Signal(int, str)
     finished = Signal(bool, str)
@@ -726,6 +848,10 @@ class _BatchImportWorker(QThread):
     def __init__(self, folder: str, parent=None):
         super().__init__(parent)
         self._folder = folder
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
 
     def run(self):
         try:
@@ -752,10 +878,16 @@ class _BatchImportWorker(QThread):
             count = 0
             skipped = 0
             for i, person_name in enumerate(people):
+                if self._cancel_requested:
+                    self.finished.emit(False, f"Import canceled. Enrolled {count} / {total} people.")
+                    return
                 person_dir = os.path.join(self._folder, person_name)
                 embeddings = []
                 photo_path = ""
                 for fname in sorted(os.listdir(person_dir)):
+                    if self._cancel_requested:
+                        self.finished.emit(False, f"Import canceled. Enrolled {count} / {total} people.")
+                        return
                     if os.path.splitext(fname)[1].lower() not in supported:
                         continue
                     fpath = os.path.join(person_dir, fname)

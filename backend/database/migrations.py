@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 27
+CURRENT_VERSION = 45
 
 
 def apply(conn):
@@ -65,7 +65,383 @@ def apply(conn):
         _migrate_v26(conn)
     if version < 27:
         _migrate_v27(conn)
+    if version < 28:
+        _migrate_v28(conn)
+    if version < 29:
+        _migrate_v29(conn)
+    if version < 30:
+        _migrate_v30(conn)
+    if version < 31:
+        _migrate_v31(conn)
+    if version < 32:
+        _migrate_v32(conn)
+    if version < 33:
+        _migrate_v33(conn)
+    if version < 34:
+        _migrate_v34(conn)
+    if version < 35:
+        _migrate_v35(conn)
+    if version < 36:
+        _migrate_v36(conn)
+    if version < 37:
+        _migrate_v37(conn)
+    if version < 38:
+        _migrate_v38(conn)
+    if version < 39:
+        _migrate_v39(conn)
+    if version < 40:
+        _migrate_v40(conn)
+    if version < 41:
+        _migrate_v41(conn)
+    if version < 42:
+        _migrate_v42(conn)
+    if version < 43:
+        _migrate_v43(conn)
+    if version < 44:
+        _migrate_v44(conn)
+    if version < 45:
+        _migrate_v45(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v45(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("popup_notifications_enabled", "1", "bool", "Popup notifications", "notifications"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        ("bool", "Popup notifications", "notifications", "popup_notifications_enabled"),
+    )
+    conn.commit()
+
+
+def _migrate_v44(conn):
+    settings = [
+        ("object_tracker_low_confidence", "0.10", "float", "Object Tracker Low Confidence", "detection"),
+        ("object_tracker_low_confidence_ratio", "0.45", "float", "Object Tracker Low Confidence Ratio", "detection"),
+        ("object_tracker_new_track_confidence", "0.35", "float", "Object Tracker New Track Confidence", "detection"),
+        ("object_tracker_confirm_hits", "2", "int", "Object Tracker Confirm Hits", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.commit()
+
+
+def _migrate_v43(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("display_bbox_hold_sec", "0.45", "float", "Display BBox Hold", "performance"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value='0.45', type='float', label='Display BBox Hold', section='performance' "
+        "WHERE key='display_bbox_hold_sec'"
+    )
+    conn.commit()
+
+
+def _migrate_v42(conn):
+    settings = [
+        ("bbox_hold_max_frames", "6", "int", "BBox Hold Frames", "performance"),
+        ("bbox_hold_max_stale_sec", "0.75", "float", "BBox Hold Staleness", "performance"),
+        ("display_bbox_hold_sec", "0.45", "float", "Display BBox Hold", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='6' WHERE key='bbox_hold_max_frames' AND CAST(value AS INTEGER) < 6")
+    conn.execute("UPDATE app_settings SET value='0.75' WHERE key='bbox_hold_max_stale_sec' AND CAST(value AS REAL) < 0.75")
+    conn.commit()
+
+
+def _migrate_v41(conn):
+    settings = [
+        ("detection_interval", "1", "int", "Detection Interval", "performance"),
+        ("insightface_det_size", "640", "int", "InsightFace Detector Size", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='640' WHERE key='insightface_det_size' AND CAST(value AS INTEGER) < 320")
+    conn.commit()
+
+
+def _migrate_v40(conn):
+    settings = [
+        ("live_infer_dim", "640", "int", "Live Inference Size", "performance"),
+        ("live_infer_dim_min", "384", "int", "Live Inference Size Min", "performance"),
+        ("live_infer_dim_max", "768", "int", "Live Inference Size Max", "performance"),
+        ("adaptive_live_infer_dim", "1", "bool", "Adaptive Live Inference Size", "performance"),
+        ("detector_max_infer_dim", "768", "int", "Detector Max Inference Size", "performance"),
+        ("bbox_hold_max_frames", "6", "int", "BBox Hold Frames", "performance"),
+        ("bbox_hold_max_stale_sec", "0.75", "float", "BBox Hold Staleness", "performance"),
+        ("min_face_size", "24", "int", "Minimum Face Size", "detection"),
+        ("object_min_area_ratio", "0.00025", "float", "Object Minimum Area Ratio", "detection"),
+        ("person_weak_detection_confidence", "0.55", "float", "Weak Person Confidence", "detection"),
+        ("person_tiny_area_ratio", "0.006", "float", "Tiny Person Area Ratio", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='640' WHERE key='live_infer_dim' AND CAST(value AS INTEGER) < 640")
+    conn.execute("UPDATE app_settings SET value='384' WHERE key='live_infer_dim_min' AND CAST(value AS INTEGER) < 384")
+    conn.execute("UPDATE app_settings SET value='768' WHERE key='live_infer_dim_max' AND CAST(value AS INTEGER) < 768")
+    conn.execute("UPDATE app_settings SET value='24' WHERE key='min_face_size' AND CAST(value AS INTEGER) >= 40")
+    conn.execute("UPDATE app_settings SET value='24' WHERE key LIKE 'camera_%_min_face_size' AND CAST(value AS INTEGER) >= 40")
+    conn.commit()
+
+
+def _migrate_v39(conn):
+    row = conn.execute("SELECT value FROM app_settings WHERE key='insightface_allowed_modules'").fetchone()
+    gender_row = conn.execute("SELECT value FROM app_settings WHERE key='gender_inference_enabled'").fetchone()
+    gender_enabled = str(gender_row[0]).strip().lower() in ("1", "true", "yes", "on") if gender_row else False
+    existing = []
+    if row and row[0]:
+        try:
+            parsed = json.loads(row[0])
+            if isinstance(parsed, list):
+                existing = [str(v) for v in parsed]
+        except Exception:
+            existing = []
+    modules = ["detection", "recognition"]
+    if gender_enabled and ("genderage" in existing or not row):
+        modules.append("genderage")
+    conn.execute(
+        "INSERT OR REPLACE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("insightface_allowed_modules", json.dumps(modules), "json", "Allowed InsightFace Modules", "detection"),
+    )
+    conn.commit()
+
+
+def _migrate_v38(conn):
+    for key in ("bbox_predict_max_frames", "bbox_predict_max_stale_sec"):
+        conn.execute("DELETE FROM app_settings WHERE key=?", (key,))
+    conn.commit()
+
+
+def _migrate_v37(conn):
+    settings = [
+        ("live_infer_interval_max", "2", "int", "Live Inference Interval Max", "performance"),
+        ("bbox_predict_max_frames", "2", "int", "BBox Prediction Max Frames", "performance"),
+        ("bbox_predict_max_stale_sec", "0.20", "float", "BBox Prediction Max Staleness", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("UPDATE app_settings SET value='2' WHERE key='live_infer_interval_max' AND value='3'")
+    conn.commit()
+
+
+def _migrate_v36(conn):
+    settings = [
+        ("adaptive_live_infer_interval", "1", "bool", "Adaptive Live Inference Interval", "performance"),
+        ("live_infer_interval_min", "1", "int", "Live Inference Interval Min", "performance"),
+        ("live_infer_interval_max", "2", "int", "Live Inference Interval Max", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.commit()
+
+
+def _migrate_v35(conn):
+    settings = [
+        ("liveness_pass_recheck_every_n_frames", "1", "int", "Liveness Pass Recheck Stride", "detection"),
+        ("liveness_pass_revoke_threshold", "0.20", "float", "Liveness Pass Revoke Threshold", "detection"),
+        ("liveness_identity_track_min_iou", "0.20", "float", "Liveness Identity Track Minimum IOU", "detection"),
+        ("liveness_failure_log_cooldown_sec", "20.0", "float", "Liveness Failure Log Cooldown", "detection"),
+        ("liveness_block_screen_presentations", "1", "bool", "Block Screen Presentations", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.commit()
+
+
+def _migrate_v34(conn):
+    settings = [
+        ("liveness_passive_real_class_index", "1", "int", "Passive Liveness Real Class Index", "detection"),
+        ("liveness_passive_normalization", "raw", "string", "Passive Liveness Normalization", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute(
+        "UPDATE app_settings SET value=? WHERE key=? AND value=?",
+        ("1", "liveness_passive_real_class_index", "0"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value=? WHERE key=? AND value=?",
+        ("raw", "liveness_passive_normalization", "zero_one"),
+    )
+    conn.commit()
+
+
+def _migrate_v33(conn):
+    settings = [
+        ("liveness_passive_real_class_index", "1", "int", "Passive Liveness Real Class Index", "detection"),
+        ("liveness_passive_color_order", "bgr", "string", "Passive Liveness Color Order", "detection"),
+        ("liveness_passive_crop_scale", "2.7", "float", "Passive Liveness Crop Scale", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute(
+        "UPDATE app_settings SET value=? WHERE key=? AND value=?",
+        ("1", "liveness_passive_real_class_index", "0"),
+    )
+    conn.commit()
+
+
+def _migrate_v32(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("liveness_passive_temporal_fallback", "0", "bool", "Passive Temporal Fallback", "detection"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value=?, type=?, label=?, section=? WHERE key=?",
+        ("0", "bool", "Passive Temporal Fallback", "detection", "liveness_passive_temporal_fallback"),
+    )
+    conn.commit()
+
+
+def _migrate_v31(conn):
+    settings = [
+        ("liveness_mode", "passive", "string", "Liveness Mode", "detection"),
+        ("liveness_passive_model_path", "data/models/liveness.onnx", "string", "Passive Liveness Model Path", "detection"),
+        ("liveness_passive_threshold", "0.70", "float", "Passive Liveness Threshold", "detection"),
+        ("liveness_passive_min_frames", "3", "int", "Passive Liveness Minimum Frames", "detection"),
+        ("liveness_passive_window_sec", "1.2", "float", "Passive Liveness Window", "detection"),
+        ("liveness_passive_every_n_frames", "3", "int", "Passive Liveness Inference Stride", "detection"),
+        ("liveness_passive_real_class_index", "1", "int", "Passive Liveness Real Class Index", "detection"),
+        ("liveness_passive_normalization", "raw", "string", "Passive Liveness Normalization", "detection"),
+        ("liveness_passive_color_order", "bgr", "string", "Passive Liveness Color Order", "detection"),
+        ("liveness_passive_crop_scale", "2.7", "float", "Passive Liveness Crop Scale", "detection"),
+        ("liveness_passive_temporal_fallback", "0", "bool", "Passive Temporal Fallback", "detection"),
+        ("liveness_onnx_provider_preference", "auto", "string", "Liveness ONNX Provider", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.commit()
+
+
+def _migrate_v30(conn):
+    settings = [
+        ("liveness_challenge_seconds", "8.0", "float", "Liveness Challenge Seconds", "detection"),
+        ("liveness_yaw_threshold", "0.16", "float", "Liveness Head Turn Threshold", "detection"),
+        ("liveness_pose_frames", "2", "int", "Liveness Consecutive Pose Frames", "detection"),
+        ("liveness_pass_ttl_sec", "30.0", "float", "Liveness Pass Time-To-Live", "detection"),
+        ("liveness_failure_hold_sec", "2.0", "float", "Liveness Failure Hold", "detection"),
+        ("liveness_allow_bbox_fallback", "0", "bool", "Allow BBox Liveness Fallback", "detection"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.commit()
+
+
+def _migrate_v29(conn):
+    settings = [
+        ("remember_login", "0", "bool", "Remember Email", "security"),
+        ("remember_email", "", "string", "Remembered Email", "security"),
+        ("live_clip_enabled", "0", "bool", "Save Live Alarm Clips", "performance"),
+        ("live_clip_seconds", "5", "int", "Live Clip Seconds", "performance"),
+        ("live_clip_max_buffer_mb", "128", "int", "Live Clip Buffer Limit (MB)", "performance"),
+        ("live_clip_buffer_max_dim", "640", "int", "Live Clip Buffer Max Dimension", "performance"),
+        ("ui_live_render_fps", "15", "float", "Live View Render FPS", "performance"),
+        ("inference_future_timeout_sec", "2.0", "float", "Inference Timeout (seconds)", "performance"),
+    ]
+    for key, value, vtype, label, section in settings:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+            (key, value, vtype, label, section),
+        )
+        conn.execute(
+            "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+            (vtype, label, section, key),
+        )
+    conn.execute("DELETE FROM app_settings WHERE key='remember_account_id'")
+    conn.commit()
+
+
+def _migrate_v28(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("ui_tab_transitions_enabled", "1", "bool", "Tab transition animations", "performance"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        ("bool", "Tab transition animations", "performance", "ui_tab_transitions_enabled"),
+    )
     conn.commit()
 
 
@@ -137,9 +513,8 @@ def _migrate_v24(conn):
 
 def _migrate_v23(conn):
     settings = [
-        ("remember_login", "0", "bool", "Keep Me Logged In", "security"),
+        ("remember_login", "0", "bool", "Remember Email", "security"),
         ("remember_email", "", "string", "Remembered Email", "security"),
-        ("remember_account_id", "", "string", "Remembered Account Id", "security"),
     ]
     for key, value, vtype, label, section in settings:
         conn.execute(

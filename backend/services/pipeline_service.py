@@ -59,10 +59,14 @@ class PipelineService:
 
                 gen = get_generator(self._camera_id)
                 for face in result.get("all_faces", []):
+                    if face.get("_coasted"):
+                        continue
                     bbox = face.get("bbox")
                     if bbox:
                         gen.add_detection(bbox, infer_fw, infer_fh)
                 for obj in result.get("object_bboxes", []):
+                    if obj.get("_coasted"):
+                        continue
                     bbox = obj.get("bbox")
                     if bbox:
                         gen.add_detection(bbox, infer_fw, infer_fh)

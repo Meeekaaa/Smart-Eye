@@ -1,6 +1,5 @@
 from frontend.styles._colors import (
     _ACCENT,
-    _ACCENT_BG_22,
     _ACCENT_HI_BG_12,
     _ACCENT_HI_BG_22,
     _BG_BASE,
@@ -22,7 +21,6 @@ from frontend.ui_tokens import (
     RADIUS_LG,
     RADIUS_MD,
     RADIUS_NONE,
-    RADIUS_SM,
     SIZE_CONTROL_22,
     SIZE_CONTROL_XS,
     SIZE_ICON_10,
@@ -32,7 +30,6 @@ from frontend.ui_tokens import (
     SPACE_6,
     SPACE_LG,
     SPACE_SM,
-    SPACE_XS,
     SPACE_XXXS,
 )
 

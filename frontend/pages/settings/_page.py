@@ -1,11 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import logging
 import os
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFont, QIcon, QPixmap
+from PySide6.QtCore import QSize, Signal
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -21,6 +20,7 @@ from PySide6.QtWidgets import (
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.styles.page_styles import divider_style
 from frontend.ui_tokens import (
     FONT_SIZE_LARGE,
@@ -61,7 +61,7 @@ _ICON_SIZE = QSize(16, 16)
 _TABS: list[tuple[str, str]] = [
     ("General", "settings.png"),
     ("Performance", "dashboard.png"),
-    ("Detection and recogention", "faces.png"),
+    ("Detection & Recognition", "faces.png"),
     ("Accounts", "account.png"),
     ("Database", "folder.png"),
 ]
@@ -77,6 +77,7 @@ def _load_icon(filename: str) -> QIcon:
 
 class SettingsPage(QWidget):
     theme_changed = Signal(str)
+    tab_transitions_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -118,13 +119,13 @@ class SettingsPage(QWidget):
         row.addWidget(title)
         row.addStretch()
 
-        import_btn = QPushButton("Import…")
+        import_btn = QPushButton("Import...")
         import_btn.setStyleSheet(_PRIMARY_BTN)
         import_btn.setFixedSize(SIZE_BTN_W_100, _BTN_H)
         import_btn.clicked.connect(self._import_settings)
         row.addWidget(import_btn)
 
-        export_btn = QPushButton("Export…")
+        export_btn = QPushButton("Export...")
         export_btn.setStyleSheet(_PRIMARY_BTN)
         export_btn.setFixedSize(SIZE_BTN_W_100, _BTN_H)
         export_btn.clicked.connect(self._export_settings)
@@ -178,7 +179,7 @@ class SettingsPage(QWidget):
         return sep
 
     def _build_content(self) -> QWidget:
-        self._stack = QStackedWidget()
+        self._stack = AnimatedStackedWidget()
         self._stack.setStyleSheet(f"background: {_BG_SURFACE};")
 
         self._general_tab = GeneralTab()
@@ -200,6 +201,7 @@ class SettingsPage(QWidget):
         self._general_tab.debug_mode_changed.connect(self._set_debug_visible)
         self._general_tab.experimental_mode_changed.connect(self._set_experimental_visible)
         self._general_tab.theme_changed.connect(self.theme_changed.emit)
+        self._performance_tab.tab_transitions_changed.connect(self.tab_transitions_changed.emit)
 
         self._switch_to(0)
         return self._stack

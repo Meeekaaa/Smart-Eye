@@ -1,3 +1,6 @@
+import time
+import zlib
+
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QLabel, QSizePolicy
@@ -33,11 +36,23 @@ _CLASS_COLORS = [
     _CLASS_COLOR_6,
     _CLASS_COLOR_7,
     _CLASS_COLOR_8,
+    "#2dd4bf",
+    "#e879f9",
+    "#facc15",
+    "#38bdf8",
+    "#fb7185",
+    "#84cc16",
 ]
 
 
 def _class_color(text: str) -> str:
-    return _CLASS_COLORS[hash(text) % len(_CLASS_COLORS)]
+    key = str(text or "?").strip().lower().encode("utf-8", errors="ignore")
+    return _CLASS_COLORS[zlib.crc32(key) % len(_CLASS_COLORS)]
+
+
+def _normalized_color_hex(value: str | None) -> str:
+    color = QColor(str(value or ""))
+    return color.name().lower() if color.isValid() else ""
 
 
 class VideoWidget(QLabel):
@@ -54,15 +69,27 @@ class VideoWidget(QLabel):
         self._frame_w = 1
         self._frame_h = 1
         self._fps = 0.0
+        self._render_fps = 0.0
+        self._infer_fps = 0.0
+        self._has_infer_fps = False
+        self._render_count = 0
+        self._last_render_fps_time = time.monotonic()
+        self._bbox_color_assignments: dict[str, str] = {}
+        self._bbox_color_claims: dict[str, str] = {}
 
     def update_frame(self, frame, state=None):
-        if state:
-            self._state = state
+        if state is not None:
+            self._state = state or {}
+            self._fps = float(state.get("_capture_fps", self._fps) or 0.0)
+            if "_infer_fps" in state:
+                self._infer_fps = float(state.get("_infer_fps") or 0.0)
+                self._has_infer_fps = True
         if frame is None:
             return
         self._last_frame = frame
         if len(frame.shape) != 3 or frame.shape[2] != 3:
             return
+        self._update_render_fps()
         h, w, ch = frame.shape
         self._frame_w, self._frame_h = w, h
         qimg = QImage(frame.data, w, h, ch * w, QImage.Format.Format_BGR888)
@@ -76,15 +103,60 @@ class VideoWidget(QLabel):
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.FastTransformation if use_fast else Qt.TransformationMode.SmoothTransformation,
         )
-        if self._show_overlays and self._state:
+        if self._show_overlays:
             scaled = self._draw_overlays(scaled, w, h)
         self.setPixmap(scaled)
+
+    def _update_render_fps(self):
+        self._render_count += 1
+        now = time.monotonic()
+        elapsed = now - self._last_render_fps_time
+        if elapsed >= 1.0:
+            self._render_fps = self._render_count / elapsed
+            self._render_count = 0
+            self._last_render_fps_time = now
 
     def _scale_bbox(self, bbox, frame_w, frame_h, px_w, px_h):
         sx = px_w / frame_w
         sy = px_h / frame_h
         x1, y1, x2, y2 = bbox
         return (int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy))
+
+    def _stable_bbox_color(self, key: str, preferred: str | None = None) -> str:
+        stable_key = str(key or "?").strip().lower()
+        preferred_hex = _normalized_color_hex(preferred)
+        assigned = self._bbox_color_assignments.get(stable_key)
+        if assigned:
+            if not preferred_hex or assigned == preferred_hex:
+                return assigned
+            claimant = self._bbox_color_claims.get(preferred_hex)
+            if claimant in (None, stable_key):
+                if self._bbox_color_claims.get(assigned) == stable_key:
+                    self._bbox_color_claims.pop(assigned, None)
+                self._bbox_color_assignments[stable_key] = preferred_hex
+                self._bbox_color_claims[preferred_hex] = stable_key
+                return preferred_hex
+            return assigned
+
+        if preferred_hex:
+            claimant = self._bbox_color_claims.get(preferred_hex)
+            if claimant in (None, stable_key):
+                self._bbox_color_assignments[stable_key] = preferred_hex
+                self._bbox_color_claims[preferred_hex] = stable_key
+                return preferred_hex
+
+        seed = zlib.crc32(stable_key.encode("utf-8", errors="ignore"))
+        for offset in range(len(_CLASS_COLORS)):
+            color = _normalized_color_hex(_CLASS_COLORS[(seed + offset) % len(_CLASS_COLORS)])
+            claimant = self._bbox_color_claims.get(color)
+            if claimant in (None, stable_key):
+                self._bbox_color_assignments[stable_key] = color
+                self._bbox_color_claims[color] = stable_key
+                return color
+
+        color = _normalized_color_hex(_CLASS_COLORS[seed % len(_CLASS_COLORS)])
+        self._bbox_color_assignments[stable_key] = color
+        return color
 
     def _draw_overlays(self, pixmap: QPixmap, frame_w: int, frame_h: int) -> QPixmap:
         px_w, px_h = pixmap.width(), pixmap.height()
@@ -120,25 +192,64 @@ class VideoWidget(QLabel):
             gender = (face.get("gender") or "unknown").title()
             conf = face.get("confidence") or 0.0
             liveness = face.get("liveness") or 0.0
-            if identity:
-                color = _SUCCESS if liveness >= 0.5 else _WARNING_ORANGE
-                label = f"{identity} ({gender}) {conf:.1%}"
+            pending = bool(face.get("liveness_pending", False))
+            secs = int(face.get("liveness_seconds_left", 0.0) or 0)
+            spoof = face.get("spoof_type")
+
+            if spoof:
+                base_color = _DANGER_DIM
+                face_status = f"spoof:{spoof}"
+                if spoof == "landmarks_missing":
+                    label = "Face landmarks unavailable"
+                elif spoof in ("liveness_model_missing", "passive_unavailable"):
+                    label = "Liveness model unavailable"
+                elif spoof == "passive_spoof":
+                    label = "Spoof suspected"
+                elif spoof == "screen_presentation":
+                    label = "Screen presentation blocked"
+                else:
+                    label = "Verification failed"
+            elif pending:
+                base_color = _WARNING_ORANGE
+                face_status = "pending"
+                if secs > 0:
+                    label = f"Verifying face ({secs}s)"
+                else:
+                    label = "Verifying face"
             else:
-                color = _DANGER_DIM
-                label = f"Unknown ({gender}) {conf:.1%}" if conf > 0.1 else f"Face ({gender})"
+                if identity:
+                    if liveness >= 0.5:
+                        base_color = _SUCCESS
+                        face_status = "verified"
+                        label = f"{identity} ({gender}) {conf:.1%}"
+                    else:
+                        base_color = _WARNING_ORANGE
+                        face_status = "unverified"
+                        label = "Unverified face"
+                else:
+                    base_color = _DANGER_DIM
+                    face_status = "unknown"
+                    label = f"Unknown ({gender}) {conf:.1%}" if conf > 0.1 else f"Face ({gender})"
+
+            color = self._stable_bbox_color(f"face:{identity or 'unknown'}:{gender}:{face_status}", base_color)
             draw_box(face["bbox"], color, label)
 
         if not self._state.get("all_faces") and self._state.get("face_bbox"):
             identity = self._state.get("identity", "Unknown")
             gender = (self._state.get("gender") or "unknown").title()
             conf = self._state.get("face_confidence", 0.0)
-            color = _SUCCESS if identity and identity != "Unknown" else _DANGER_DIM
+            base_color = _SUCCESS if identity and identity != "Unknown" else _DANGER_DIM
+            status = "verified" if identity and identity != "Unknown" else "unknown"
+            color = self._stable_bbox_color(f"face:primary:{identity or 'unknown'}:{gender}:{status}", base_color)
             draw_box(self._state["face_bbox"], color, f"{identity or 'Unknown'} ({gender}) {conf:.1%}")
 
         for obj in self._state.get("object_bboxes", []):
             cls = obj.get("class_name", obj.get("plugin_name", "?"))
             conf = obj.get("confidence", 0.0)
-            color = obj.get("bbox_color") or _class_color(cls)
+            plugin_id = obj.get("plugin_id", obj.get("plugin_name", ""))
+            class_id = obj.get("class", obj.get("class_id", ""))
+            color_key = f"object:{plugin_id}:{class_id}:{cls}"
+            color = self._stable_bbox_color(color_key, obj.get("bbox_color") or _class_color(cls))
             draw_box(obj["bbox"], color, f"{cls} {conf:.1%}")
 
         if self._camera_name:
@@ -167,18 +278,29 @@ class VideoWidget(QLabel):
             painter.setPen(QColor(_ACCENT_HI))
             painter.drawText(QRect(6, 6, bw, bh), Qt.AlignmentFlag.AlignCenter, badge_text)
 
-        if self._fps > 0:
-            fps_text = f"{self._fps:.1f} fps"
+        if self._fps > 0 or self._render_fps > 0 or self._has_infer_fps:
+            metrics = []
+            if self._fps > 0:
+                metrics.append(("Cam", self._fps))
+            if self._render_fps > 0:
+                metrics.append(("UI", self._render_fps))
+            if self._has_infer_fps:
+                metrics.append(("AI", self._infer_fps))
+            fps_text = "  ".join(f"{name} {value:.1f}" for name, value in metrics)
             painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
             fm = painter.fontMetrics()
             bw = fm.horizontalAdvance(fps_text) + 10
+            if bw > px_w - 12:
+                fps_text = "  ".join(f"{name[0]} {value:.0f}" for name, value in metrics)
+                bw = fm.horizontalAdvance(fps_text) + 10
             bh = fm.height() + 4
             bg2 = QColor(_BG_SURFACE)
             bg2.setAlpha(180)
             painter.setBrush(QBrush(bg2))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(QRect(6, px_h - bh - 6, bw, bh), 3, 3)
-            fps_color = _SUCCESS if self._fps >= 20 else (_WARNING_ORANGE if self._fps >= 10 else _DANGER_DIM)
+            displayed_fps = self._render_fps or self._fps
+            fps_color = _SUCCESS if displayed_fps >= 20 else (_WARNING_ORANGE if displayed_fps >= 10 else _DANGER_DIM)
             painter.setPen(QColor(fps_color))
             painter.drawText(QRect(6, px_h - bh - 6, bw, bh), Qt.AlignmentFlag.AlignCenter, fps_text)
 

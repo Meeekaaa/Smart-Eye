@@ -29,17 +29,12 @@ from frontend.styles._banner_styles import make_edit_banner
 from ._widgets import build_rule_header
 from frontend.styles._input_styles import _FORM_INPUT_TITLE, _FORM_INPUTS
 from frontend.ui_tokens import (
-    FONT_SIZE_7,
     FONT_SIZE_CAPTION,
     FONT_SIZE_LABEL,
-    FONT_SIZE_MICRO,
-    FONT_WEIGHT_BOLD,
     FONT_WEIGHT_NORMAL,
     RADIUS_3,
-    RADIUS_5,
     SIZE_BTN_W_80,
     SIZE_BTN_W_MD,
-    SIZE_BTN_W_SM,
     SIZE_CONTROL_MD,
     SIZE_LABEL_W,
     SIZE_PANEL_MD,
@@ -64,7 +59,6 @@ from ._constants import (
     _BG_SURFACE,
     _BORDER,
     _BORDER_DIM,
-    _PRIMARY_BTN,
     _TEXT_PRI,
     _TEXT_BTN_BLUE,
     _TEXT_BTN_GHOST,
@@ -88,6 +82,8 @@ class _BaseRuleForm(QWidget):
         self._condition_rows: list[ConditionRow] = []
         self._alarm_vbox: QVBoxLayout | None = None
         self._cond_vbox: QVBoxLayout | None = None
+        self._alarm_divider: QWidget | None = None
+        self._alarm_pad: QWidget | None = None
 
     def _make_banner(self) -> QWidget:
         raise NotImplementedError
@@ -182,6 +178,7 @@ class _BaseRuleForm(QWidget):
         self._e_action = QComboBox()
         self._e_action.addItems(["alarm", "suppress", "log_only"])
         self._e_action.setStyleSheet(_combo_ss())
+        self._e_action.currentTextChanged.connect(lambda _text: self._sync_alarm_section())
         body_l.addWidget(_srow("Action", self._e_action))
 
         self._e_camera = QComboBox()
@@ -250,8 +247,10 @@ class _BaseRuleForm(QWidget):
             self._no_cond_lbl.show()
 
     def _build_alarms_section(self, body_l: QVBoxLayout):
-        body_l.addWidget(_make_sdiv("Alarm Escalation"))
+        self._alarm_divider = _make_sdiv("Alarm Escalation")
+        body_l.addWidget(self._alarm_divider)
         alarm_pad = QWidget()
+        self._alarm_pad = alarm_pad
         alarm_pad.setStyleSheet("background:transparent;")
         alarm_lay = QVBoxLayout(alarm_pad)
         alarm_lay.setContentsMargins(SPACE_18, SPACE_14, SPACE_18, SPACE_14)
@@ -272,6 +271,13 @@ class _BaseRuleForm(QWidget):
         self._alarm_vbox.addWidget(self._no_alarm_lbl)
         alarm_lay.addLayout(self._alarm_vbox)
         body_l.addWidget(alarm_pad)
+        self._sync_alarm_section()
+
+    def _sync_alarm_section(self):
+        visible = getattr(self, "_e_action", None) is not None and self._e_action.currentText() == "alarm"
+        for widget in (self._alarm_divider, self._alarm_pad):
+            if widget is not None:
+                widget.setVisible(visible)
 
     def _add_alarm_card(self, data: dict | None = None):
         if data is None:
@@ -302,6 +308,8 @@ class _BaseRuleForm(QWidget):
         return [r.get_data() for r in self._condition_rows if r.get_data()["attribute"] and r.get_data()["value"]]
 
     def _collect_alarms(self) -> list[dict]:
+        if getattr(self, "_e_action", None) is not None and self._e_action.currentText() != "alarm":
+            return []
         return [c.get_data() for c in self._alarm_cards]
 
 
@@ -407,20 +415,24 @@ class _EditRuleForm(_BaseRuleForm):
             self._e_name.setFocus()
             return
 
-        self._rules_service.save_rule(
-            self._rule_id,
-            data=dict(
-                name=name,
-                description=self._e_desc.toPlainText().strip(),
-                logic=self._e_logic.currentText(),
-                action=self._e_action.currentText(),
-                priority=self._e_priority.value(),
-                camera_id=self._e_camera.currentData(),
-                enabled=self._e_enabled.isChecked(),
-            ),
-            conditions=self._collect_conditions(),
-            alarms=self._collect_alarms(),
-        )
+        try:
+            self._rules_service.save_rule(
+                self._rule_id,
+                data=dict(
+                    name=name,
+                    description=self._e_desc.toPlainText().strip(),
+                    logic=self._e_logic.currentText(),
+                    action=self._e_action.currentText(),
+                    priority=self._e_priority.value(),
+                    camera_id=self._e_camera.currentData(),
+                    enabled=self._e_enabled.isChecked(),
+                ),
+                conditions=self._collect_conditions(),
+                alarms=self._collect_alarms(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Rule", str(exc))
+            return
         self.saved.emit()
 
 
@@ -446,7 +458,7 @@ class NewRulePanel(_BaseRuleForm):
         lbl.setStyleSheet(f"color:{_TEXT_PRI};")
         bi.addWidget(lbl)
         bi.addStretch()
-        close_x = QPushButton("✕")
+        close_x = QPushButton("X")
         close_x.setFixedSize(SIZE_CONTROL_MD, SIZE_CONTROL_MD)
         close_x.setStyleSheet(_TEXT_BTN_GHOST)
         close_x.clicked.connect(lambda: self.close_requested.emit())
@@ -514,18 +526,22 @@ class NewRulePanel(_BaseRuleForm):
             self._e_name.setFocus()
             return
 
-        rid = self._rules_service.save_rule(
-            None,
-            data=dict(
-                name=name,
-                description=self._e_desc.toPlainText().strip(),
-                logic=self._e_logic.currentText(),
-                action=self._e_action.currentText(),
-                priority=self._e_priority.value(),
-                camera_id=self._e_camera.currentData(),
-                enabled=self._e_enabled.isChecked(),
-            ),
-            conditions=self._collect_conditions(),
-            alarms=self._collect_alarms(),
-        )
+        try:
+            rid = self._rules_service.save_rule(
+                None,
+                data=dict(
+                    name=name,
+                    description=self._e_desc.toPlainText().strip(),
+                    logic=self._e_logic.currentText(),
+                    action=self._e_action.currentText(),
+                    priority=self._e_priority.value(),
+                    camera_id=self._e_camera.currentData(),
+                    enabled=self._e_enabled.isChecked(),
+                ),
+                conditions=self._collect_conditions(),
+                alarms=self._collect_alarms(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid Rule", str(exc))
+            return
         self.saved.emit(int(rid))

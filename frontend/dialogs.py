@@ -16,15 +16,9 @@ from PySide6.QtWidgets import (
 
 from frontend.styles._btn_styles import _DANGER_BTN, _PRIMARY_BTN, _SECONDARY_BTN
 from frontend.styles._colors import (
-    _DANGER,
-    _DANGER_BORDER_SOFT,
-    _DANGER_DIM,
     _DB_BG_GRAD_2,
     _DB_BG_GRAD_3,
-    _DB_CANCEL_BG,
-    _DB_CANCEL_BG_ALT,
     _TEXT_MUTED,
-    _TEXT_ON_ACCENT,
     _TEXT_PRI,
     _TEXT_SEC,
 )
@@ -36,7 +30,6 @@ from frontend.ui_tokens import (
     SIZE_BTN_W_LG,
     SIZE_CONTROL_MD,
     SPACE_10,
-    SPACE_20,
     SPACE_LG,
     SPACE_MD,
     SPACE_XL,
@@ -187,7 +180,7 @@ def _build_dialog(title: str, text: str, icon: QMessageBox.Icon, buttons: list[t
     btn_row.addStretch()
     btn_widgets: dict[int, QPushButton] = {}
     danger_default = icon in (QMessageBox.Icon.Warning, QMessageBox.Icon.Critical, QMessageBox.Icon.Question)
-    for idx, (label, code) in enumerate(buttons):
+    for label, code in buttons:
         btn = QPushButton(label)
         btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
         if code == default_btn and danger_default:

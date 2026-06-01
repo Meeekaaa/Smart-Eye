@@ -104,6 +104,26 @@ class DebugService:
     def get_db_path(self) -> str:
         return db.get_db_path()
 
+    def prepare_seed_support(
+        self,
+        *,
+        camera_count: int = 3,
+        camera_rows: list[dict] | None = None,
+        face_count: int = 6,
+    ) -> list[dict]:
+        def _op(conn):
+            rows = list(camera_rows or [])
+            if not rows and camera_count > 0:
+                rows = DebugService.create_dummy_cameras(conn, count=camera_count)
+            if not rows:
+                rows = DebugService.get_camera_info(conn)
+            DebugService.ensure_debug_rules(conn, rows)
+            DebugService.ensure_debug_faces(conn, count=face_count)
+            DebugService.ensure_debug_notification_profiles(conn)
+            return rows
+
+        return db.write_transaction(_op)
+
     @staticmethod
     def create_dummy_cameras(conn, count: int = 3) -> list[dict]:
         created = []

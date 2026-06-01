@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QPainterPath, QPixmap
@@ -261,6 +261,15 @@ class AccountsTab(QWidget):
         if not is_admin and not tabs:
             self._status_lbl.setText("Select at least one tab for limited accounts.")
             return
+        if not is_new and not is_admin:
+            other_admins = [
+                acc
+                for acc in db.get_accounts()
+                if acc.get("id") != self._editing_id and bool(acc.get("is_admin"))
+            ]
+            if not other_admins:
+                self._status_lbl.setText("At least one administrator account is required.")
+                return
         questions = [self._q1.text().strip(), self._q2.text().strip(), self._q3.text().strip()]
         answers = [self._a1.text(), self._a2.text(), self._a3.text()]
         any_answer = any(a.strip() for a in answers)
@@ -458,6 +467,9 @@ class AccountsTab(QWidget):
         accounts = db.get_accounts()
         if len(accounts) <= 1:
             QMessageBox.warning(self, "Blocked", "At least one account is required.")
+            return
+        if acc.get("is_admin") and not any(a.get("id") != acc.get("id") and a.get("is_admin") for a in accounts):
+            QMessageBox.warning(self, "Blocked", "At least one administrator account is required.")
             return
         try:
             db.delete_account(acc.get("id"))

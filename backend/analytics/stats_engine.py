@@ -265,10 +265,17 @@ def _dummy_gender_violations(gender=None, min_alarm_level=None):
     return rows
 
 
-def get_summary(date_from=None, date_to=None, camera_id=None, min_alarm_level=None, gender=None):
+def get_summary(date_from=None, date_to=None, camera_id=None, min_alarm_level=None, gender=None, rule_name=None):
     if is_dummy_analytics_enabled():
         return _dummy_summary(min_alarm_level=min_alarm_level, gender=gender)
-    stats = db.get_detection_stats(date_from, date_to, camera_id, min_alarm_level=min_alarm_level, gender=gender)
+    stats = db.get_detection_stats(
+        date_from,
+        date_to,
+        camera_id,
+        min_alarm_level=min_alarm_level,
+        gender=gender,
+        rule_name=rule_name,
+    )
     total = stats.get("total", 0) or 0
     violations = stats.get("violations", 0) or 0
     compliant = total - violations

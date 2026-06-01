@@ -17,13 +17,13 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from backend.repository import db
 from frontend.app_theme import safe_set_point_size
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.styles._btn_styles import _ICON_BTN_GHOST_DANGER
 from frontend.styles._colors import (
@@ -358,9 +358,14 @@ class _IdentityPicker(QWidget):
     def get_value(self) -> str:
         use_uuid = self._uuid_btn.isChecked()
         data = self._combo.currentData()
-        if isinstance(data, tuple) and (data[0] or data[1]):
+        text = self._combo.currentText().strip()
+        if isinstance(data, tuple):
+            if not (data[0] or data[1]):
+                if self._combo.currentIndex() >= 0 and text != self._combo.itemText(self._combo.currentIndex()).strip():
+                    return text
+                return ""
             return (data[1] or data[0]) if use_uuid else (data[0] or data[1])
-        return self._combo.currentText().strip()
+        return text
 
 
 class _ObjectClassPicker(QWidget):
@@ -417,7 +422,37 @@ class _ObjectClassPicker(QWidget):
 
     def get_value(self) -> str:
         data = self._combo.currentData()
-        return data if data else self._combo.currentText().strip()
+        text = self._combo.currentText().strip()
+        if data:
+            return str(data)
+        if (
+            self._combo.currentIndex() >= 0
+            and self._combo.itemData(self._combo.currentIndex()) == ""
+            and text == self._combo.itemText(self._combo.currentIndex()).strip()
+        ):
+            return ""
+        return text
+
+
+class _ObjectCountPicker(QWidget):
+    def __init__(self, initial_value: str = "", parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background:transparent;")
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+
+        self._spin = QSpinBox()
+        self._spin.setRange(0, 999)
+        self._spin.setStyleSheet(_spin_ss())
+        self._spin.setToolTip("Number of active object detections in the frame")
+        try:
+            self._spin.setValue(max(0, int(float(str(initial_value or "0")))))
+        except (TypeError, ValueError):
+            self._spin.setValue(0)
+        h.addWidget(self._spin, stretch=1)
+
+    def get_value(self) -> str:
+        return str(self._spin.value())
 
 
 class _GenderPicker(QWidget):
@@ -442,6 +477,22 @@ class _GenderPicker(QWidget):
 class ConditionRow(QFrame):
     remove_requested = Signal(object)
 
+    _OPS = [
+        ("equals", "eq"),
+        ("not equals", "neq"),
+        ("contains", "contains"),
+        ("greater than", "gt"),
+        ("less than", "lt"),
+        ("greater than or equal", "gte"),
+        ("less than or equal", "lte"),
+    ]
+    _OPS_BY_ATTR = {
+        "identity": ("eq", "neq", "contains"),
+        "gender": ("eq", "neq"),
+        "object": ("eq", "neq", "contains"),
+        "objects": ("eq", "neq", "gt", "lt", "gte", "lte"),
+    }
+
     def __init__(self, attribute="object", operator="eq", value="", parent=None):
         super().__init__(parent)
         self._build(attribute, operator, value)
@@ -459,32 +510,28 @@ class ConditionRow(QFrame):
 
         from ._constants import _get_attributes
 
+        attr_labels = {
+            "identity": "Identity",
+            "gender": "Gender",
+            "object": "Object class",
+            "objects": "Object count",
+        }
         self._attr = QComboBox()
-        self._attr.addItems(_get_attributes())
+        for attr_key in _get_attributes():
+            self._attr.addItem(attr_labels.get(attr_key, attr_key.title()), attr_key)
         if attribute in _get_attributes():
-            self._attr.setCurrentText(attribute)
+            for idx in range(self._attr.count()):
+                if self._attr.itemData(idx) == attribute:
+                    self._attr.setCurrentIndex(idx)
+                    break
         self._attr.setStyleSheet(_combo_ss())
 
-        _OPS = [
-            ("equals", "eq"),
-            ("not equals", "neq"),
-            ("contains", "contains"),
-            ("greater than", "gt"),
-            ("less than", "lt"),
-            ("greater than or equal", "gte"),
-            ("less than or equal", "lte"),
-        ]
         self._op = QComboBox()
-        for label, key in _OPS:
-            self._op.addItem(label, key)
-        for i in range(self._op.count()):
-            if self._op.itemData(i) == operator:
-                self._op.setCurrentIndex(i)
-                break
         self._op.setFixedWidth(SIZE_FIELD_W_SM)
         self._op.setStyleSheet(_combo_ss())
+        self._set_operator_options(str(self._attr.currentData() or ""), operator)
 
-        self._val_stack = QStackedWidget()
+        self._val_stack = AnimatedStackedWidget()
         self._val_stack.setStyleSheet("background:transparent;")
 
         self._val_text = QLineEdit(value)
@@ -499,11 +546,13 @@ class ConditionRow(QFrame):
         self._val_stack.addWidget(self._val_object)
         self._val_gender = _GenderPicker(value)
         self._val_stack.addWidget(self._val_gender)
+        self._val_count = _ObjectCountPicker(value)
+        self._val_stack.addWidget(self._val_count)
 
-        self._attr.currentTextChanged.connect(self._on_attr_changed)
+        self._attr.currentIndexChanged.connect(lambda _idx: self._on_attr_changed(str(self._attr.currentData() or "")))
         from PySide6.QtCore import QTimer
 
-        QTimer.singleShot(0, lambda: self._on_attr_changed(self._attr.currentText()))
+        QTimer.singleShot(0, lambda: self._on_attr_changed(str(self._attr.currentData() or "")))
 
         remove = QPushButton()
         remove.setFixedSize(SIZE_ITEM_SM, SIZE_ITEM_SM)
@@ -521,24 +570,44 @@ class ConditionRow(QFrame):
         row.addWidget(self._val_stack, stretch=2)
         row.addWidget(remove)
 
+    def _set_operator_options(self, attr: str, preferred: str | None = None):
+        current = preferred or self._op.currentData() or "eq"
+        allowed = set(self._OPS_BY_ATTR.get(attr, ("eq", "neq")))
+        self._op.blockSignals(True)
+        self._op.clear()
+        for label, key in self._OPS:
+            if key in allowed:
+                self._op.addItem(label, key)
+        target = str(current)
+        idx = self._op.findData(target)
+        if idx < 0:
+            idx = self._op.findData("gte" if attr == "objects" else "eq")
+        self._op.setCurrentIndex(max(0, idx))
+        self._op.blockSignals(False)
+
     def _on_attr_changed(self, attr: str):
+        self._set_operator_options(attr)
         if attr == "identity":
             self._val_stack.setCurrentIndex(1)
         elif attr == "gender":
             self._val_stack.setCurrentIndex(3)
-        elif attr in ("object", "objects"):
+        elif attr == "object":
             self._val_stack.setCurrentIndex(2)
+        elif attr == "objects":
+            self._val_stack.setCurrentIndex(4)
         else:
             self._val_stack.setCurrentIndex(0)
 
     def get_data(self) -> dict:
-        attr = self._attr.currentText()
+        attr = str(self._attr.currentData() or self._attr.currentText())
         if attr == "identity":
             val = self._val_identity.get_value()
         elif attr == "gender":
             val = self._val_gender.get_value()
-        elif attr in ("object", "objects"):
+        elif attr == "object":
             val = self._val_object.get_value()
+        elif attr == "objects":
+            val = self._val_count.get_value()
         else:
             val = self._val_text.text().strip()
         return {
@@ -837,14 +906,14 @@ class RuleCard(QFrame):
 
         toggle = ToggleSwitch(width=SIZE_CONTROL_MID, height=SIZE_CONTROL_22)
         toggle.setChecked(enabled)
-        toggle.toggled.connect(
-            lambda v, rid=rule["id"]: (
-                db.update_rule(rid, enabled=1 if v else 0),
-                self._on_stop_sounds() if self._on_stop_sounds else None,
-                self._on_toggle_changed() if self._on_toggle_changed else None,
-            )
-        )
+        toggle.toggled.connect(lambda v, rid=rule["id"]: self._toggle_rule(rid, v))
         right.addWidget(toggle)
+
+    def _toggle_rule(self, rule_id: int, enabled: bool) -> None:
+        if self._on_stop_sounds:
+            self._on_stop_sounds()
+        if self._on_toggle_changed:
+            self._on_toggle_changed(rule_id, enabled)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import contextlib
@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from backend.repository import db
 from frontend.app_theme import safe_set_point_size
+from frontend.services.camera_service import CameraService
 from frontend.widgets.action_feedback import make_manager_footer_layout
 from frontend.widgets.toggle_switch import ToggleSwitch
 from frontend.ui_tokens import (
@@ -55,6 +55,7 @@ from ._constants import (
 )
 
 logger = logging.getLogger(__name__)
+_RETIRED_ADD_WORKERS: set[QThread] = set()
 
 
 class AddCameraPanel(QWidget):
@@ -86,7 +87,7 @@ class AddCameraPanel(QWidget):
         bh.addWidget(t)
         bh.addStretch()
 
-        close_x = QPushButton("✕")
+        close_x = QPushButton("X")
         close_x.setFixedSize(SIZE_CONTROL_MD, SIZE_CONTROL_MD)
         close_x.setStyleSheet(_TEXT_BTN_GHOST)
         close_x.clicked.connect(lambda: self.close_requested.emit())
@@ -125,7 +126,7 @@ class AddCameraPanel(QWidget):
         bl.addWidget(_srow("Name *", self._e_name))
 
         self._e_source = QLineEdit()
-        self._e_source.setPlaceholderText("rtsp://… or 0 for webcam")
+        self._e_source.setPlaceholderText("rtsp://... or 0 for webcam")
         self._e_source.setFixedHeight(SIZE_SECTION_H)
         self._e_source.setStyleSheet(_input_ss())
         bl.addWidget(_srow("Source *", self._e_source))
@@ -163,12 +164,12 @@ class AddCameraPanel(QWidget):
             return c
 
         self._face_toggle = ToggleSwitch()
-        self._face_toggle.setChecked(False)
+        self._face_toggle.setChecked(True)
         bl.addWidget(_srow("Face Recognition", _left(self._face_toggle)))
 
         self._active_plugins_toggle = ToggleSwitch()
         self._active_plugins_toggle.setChecked(True)
-        bl.addWidget(_srow("Active Plugins", _left(self._active_plugins_toggle)))
+        bl.addWidget(_srow("Assign Enabled Plugins", _left(self._active_plugins_toggle)))
 
         self._enabled_toggle = ToggleSwitch()
         self._enabled_toggle.setChecked(True)
@@ -189,7 +190,7 @@ class AddCameraPanel(QWidget):
 
         self._min_face_size_spin = QSpinBox()
         self._min_face_size_spin.setRange(10, 500)
-        self._min_face_size_spin.setValue(40)
+        self._min_face_size_spin.setValue(24)
         self._min_face_size_spin.setSuffix(" px")
         self._min_face_size_spin.setStyleSheet(_spin_ss())
         bl.addWidget(_srow("Min Face Size", self._min_face_size_spin))
@@ -212,8 +213,12 @@ class AddCameraPanel(QWidget):
         add_btn.setFixedWidth(SIZE_BTN_W_80)
         add_btn.setStyleSheet(_TEXT_BTN_BLUE)
         add_btn.clicked.connect(self._do_save)
+        self._status_lbl = QLabel("")
+        self._status_lbl.setStyleSheet(f"color:{_TEXT_MUTED};font-size:{FONT_SIZE_CAPTION}px;background:transparent;")
+        self._status_lbl.setVisible(False)
         lay.addLayout(
             make_manager_footer_layout(
+                left_widget=self._status_lbl,
                 right_widgets=[cancel_btn, add_btn],
                 margins=(SPACE_XL, SPACE_10, SPACE_XL, SPACE_MD),
                 spacing=SPACE_SM,
@@ -231,7 +236,7 @@ class AddCameraPanel(QWidget):
         self._active_plugins_toggle.setChecked(True)
         self._thresh_spin.setValue(45)
         self._max_faces_spin.setValue(16)
-        self._min_face_size_spin.setValue(40)
+        self._min_face_size_spin.setValue(24)
         self._enabled_toggle.setChecked(True)
 
     def _set_busy(self, busy: bool):
@@ -240,22 +245,53 @@ class AddCameraPanel(QWidget):
             self._add_btn.setEnabled(not busy)
         self.setEnabled(not busy)
 
+    def _set_status(self, message: str, *, error: bool = False):
+        self._status_lbl.setText(message)
+        self._status_lbl.setStyleSheet(
+            f"color:{'#f87171' if error else _TEXT_MUTED};font-size:{FONT_SIZE_CAPTION}px;background:transparent;"
+        )
+        self._status_lbl.setVisible(bool(message))
+
+    def cleanup_worker(self) -> None:
+        worker = getattr(self, "_worker", None)
+        if worker is None:
+            return
+        self._worker = None
+        with contextlib.suppress(Exception):
+            worker.done.disconnect()
+        if worker.isRunning():
+            worker.setParent(None)
+            _RETIRED_ADD_WORKERS.add(worker)
+
+            def _cleanup(w=worker):
+                _RETIRED_ADD_WORKERS.discard(w)
+                with contextlib.suppress(Exception):
+                    w.deleteLater()
+
+            worker.finished.connect(_cleanup)
+        else:
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
+        self._set_busy(False)
+
     def _do_save(self):
         name = self._e_name.text().strip()
         source = self._e_source.text().strip()
         logger.info("camera_manager.add start name=%s source=%s", name, source)
         if not name:
-            logger.warning("Camera name is required.")
+            self._set_status("Camera name is required.", error=True)
             self._e_name.setFocus()
             return
-        if not source:
-            logger.warning("Camera source is required.")
+        ok, message = CameraService.validate_source(source)
+        if not ok:
+            self._set_status(message, error=True)
             self._e_source.setFocus()
             return
 
         if self._saving:
             return
         self._set_busy(True)
+        self._set_status("Saving camera...")
 
         params = dict(
             name=name,
@@ -280,29 +316,7 @@ class AddCameraPanel(QWidget):
 
             def run(self):
                 try:
-                    cam_id = db.add_camera(
-                        name=self.opts["name"],
-                        source=self.opts["source"],
-                        location=self.opts["location"],
-                        resolution=self.opts["resolution"],
-                        fps_limit=self.opts["fps_limit"],
-                        face_recognition=self.opts["face_recognition"],
-                        enabled=self.opts["enabled"],
-                    )
-                    with contextlib.suppress(Exception):
-                        db.update_camera(cam_id, face_similarity_threshold=self.opts["threshold"])
-                    with contextlib.suppress(Exception):
-                        db.set_setting(f"camera_{cam_id}_max_faces", self.opts["max_faces"])
-                    with contextlib.suppress(Exception):
-                        db.set_setting(f"camera_{cam_id}_min_face_size", self.opts["min_face_size"])
-                    if self.opts.get("assign_active_plugins"):
-                        with contextlib.suppress(Exception):
-                            for plug in db.get_plugins(enabled_only=True) or []:
-                                pid = plug.get("id")
-                                if pid is not None:
-                                    db.assign_plugin_to_camera(cam_id, pid)
-                    with contextlib.suppress(Exception):
-                        db.set_setting(f"camera_{cam_id}_plugins_explicit", True)
+                    cam_id = CameraService().add_camera(self.opts)
                     self.done.emit(None, cam_id)
                 except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as exc:
                     self.done.emit(exc, None)
@@ -313,7 +327,8 @@ class AddCameraPanel(QWidget):
             self._set_busy(False)
             self._worker = None
             if err:
-                logger.exception("camera_manager.add failed name=%s source=%s", name, source)
+                logger.warning("camera_manager.add failed name=%s source=%s: %s", name, source, err)
+                self._set_status(str(err), error=True)
                 return
             if params["enabled"] and cam_id is not None:
                 with contextlib.suppress(Exception):
@@ -321,6 +336,7 @@ class AddCameraPanel(QWidget):
 
                     get_camera_manager().start_camera(cam_id)
             logger.info("camera_manager.add success id=%s name=%s enabled=%s", cam_id, name, params["enabled"])
+            self._set_status("")
             self.reset()
             self.saved.emit()
 

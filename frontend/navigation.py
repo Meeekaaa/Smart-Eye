@@ -7,7 +7,7 @@ NAV_ITEMS = [
     ("Cameras", "detectors", "frontend/assets/icons/cameras.png"),
     ("Rules", "rules", "frontend/assets/icons/rules.png"),
     ("Faces", "faces", "frontend/assets/icons/faces.png"),
-    ("Notifs", "notifications", "frontend/assets/icons/notifications.png"),
+    ("Notifications", "notifications", "frontend/assets/icons/notifications.png"),
     ("Models", "models", "frontend/assets/icons/object.png"),
     ("INSIGHTS", None, None),
     ("Analytics", "analytics", "frontend/assets/icons/analytics.png"),

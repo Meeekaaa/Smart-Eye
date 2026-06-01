@@ -10,19 +10,25 @@ from frontend.app_theme import page_base_styles
 
 
 from frontend.styles._colors import (
-    _BG_BASE,
+    _BG_BASE as _BG_BASE,
     _BG_SURFACE,
     _BG_RAISED,
     _BORDER,
     _BORDER_DIM,
     _TEXT_PRI,
     _TEXT_SEC,
-    _TEXT_MUTED,
+    _TEXT_MUTED as _TEXT_MUTED,
     _ACCENT,
     _ACCENT_HI,
     _ACCENT_HI_BG_03,
 )
-from frontend.styles._btn_styles import _PRIMARY_BTN, _TEXT_BTN_BLUE, _TEXT_BTN_GHOST, _TEXT_BTN_RED, _TEXT_BTN_RED_CONFIRM
+from frontend.styles._btn_styles import (
+    _PRIMARY_BTN as _PRIMARY_BTN,
+    _TEXT_BTN_BLUE as _TEXT_BTN_BLUE,
+    _TEXT_BTN_GHOST as _TEXT_BTN_GHOST,
+    _TEXT_BTN_RED as _TEXT_BTN_RED,
+    _TEXT_BTN_RED_CONFIRM as _TEXT_BTN_RED_CONFIRM,
+)
 from frontend.ui_tokens import (
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,

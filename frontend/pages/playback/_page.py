@@ -1,7 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import sys
 import sqlite3
 import contextlib
 import json
@@ -9,7 +11,7 @@ import ast
 import time
 
 import cv2
-from PySide6.QtCore import Qt, QSize, QSettings, QTimer, QEvent, QDate
+from PySide6.QtCore import Qt, QSize, QSettings, QTimer, QEvent, QDate, QThread, Signal
 from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -21,7 +23,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
-    QListView,
     QListWidgetItem,
     QPushButton,
     QSlider,
@@ -31,13 +32,13 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QCheckBox,
     QScrollArea,
-    QStackedWidget,
     QWidget,
 )
 
 from backend.camera.playback_thread import PlaybackThread
 from backend.repository import db
 from frontend.app_theme import page_base_styles, safe_set_point_size
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 from frontend.icon_theme import themed_icon_pixmap
 from frontend.dialogs import apply_popup_theme
 from frontend.widgets.toggle_switch import ToggleSwitch
@@ -53,7 +54,6 @@ from frontend.styles._colors import (
     _BG_OVERLAY,
     _BG_SURFACE,
     _BLACK,
-    _BORDER_DARK,
     _BORDER_DIM,
     _TEXT_MUTED,
     _TEXT_PRI,
@@ -82,7 +82,6 @@ from frontend.ui_tokens import (
     FONT_SIZE_LABEL,
     FONT_SIZE_MICRO,
     FONT_WEIGHT_BOLD,
-    RADIUS_11,
     RADIUS_6,
     RADIUS_LG,
     RADIUS_MD,
@@ -166,6 +165,76 @@ _SPEED_LABEL_STYLE = text_style(_TEXT_MUTED, size=FONT_SIZE_CAPTION, weight=FONT
 
 
 _RETIRED_PLAYBACK_THREADS: list[PlaybackThread] = []
+_RETIRED_CLIP_INDEX_WORKERS: set[QThread] = set()
+
+
+def _parse_clip_filename_parts(name: str) -> tuple[int | None, int | None, str]:
+    if name.startswith("clip_cam") and "_" in name:
+        try:
+            rest = name.replace("clip_cam", "", 1)
+            cam_part, ts_part = rest.split("_", 1)
+            cam_id = int(cam_part)
+            ts = int(ts_part.split(".", 1)[0])
+            return cam_id, ts, "live"
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            return None, None, "live"
+    if name.startswith("clip_"):
+        try:
+            ts = int(name.replace("clip_", "", 1).split(".", 1)[0])
+            return None, ts, "playback"
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            return None, None, "playback"
+    return None, None, "playback"
+
+
+class _ClipIndexWorker(QThread):
+    finished_index = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
+    def run(self) -> None:
+        try:
+            existing = set(db.get_clip_paths(limit=1000) or [])
+        except (sqlite3.Error, OSError, TypeError, ValueError):
+            logger.warning("Failed to read existing clips index", exc_info=True)
+            existing = set()
+        for folder in ("data/clips_live", "data/clips"):
+            if self._cancel_requested:
+                break
+            if not os.path.isdir(folder):
+                continue
+            try:
+                names = sorted(
+                    os.listdir(folder),
+                    key=lambda n, f=folder: os.path.getmtime(os.path.join(f, n)),
+                    reverse=True,
+                )[:1000]
+            except OSError:
+                names = []
+            for name in names:
+                if self._cancel_requested:
+                    break
+                if not name.lower().endswith((".mp4", ".avi", ".mkv", ".mov", ".wmv")):
+                    continue
+                path = os.path.join(folder, name)
+                if path in existing:
+                    continue
+                cam_id, ts, source = _parse_clip_filename_parts(name)
+                if ts is None:
+                    try:
+                        ts = int(os.path.getmtime(path))
+                    except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+                        ts = None
+                try:
+                    db.add_clip(path, source, cam_id, ts, None, [], [])
+                except (sqlite3.Error, OSError, TypeError, ValueError):
+                    logger.warning("Failed to index clip path=%s", path, exc_info=True)
+        self.finished_index.emit()
 
 
 def _icon_btn(icon_path: str, size: int = 36, danger: bool = False) -> QPushButton:
@@ -218,7 +287,7 @@ class PlaybackPage(QWidget):
         self._class_filter_dialog: QDialog | None = None
         self._class_filter_checks: dict[str, QCheckBox] = {}
         self._disabled_playback_classes: set[str] = set()
-        self._media_stack: QStackedWidget | None = None
+        self._media_stack: AnimatedStackedWidget | None = None
         self._media_tab_btns: dict[str, QPushButton] = {}
         self._media_open_folder_btn: QPushButton | None = None
         self._snapshots_list: QListWidget | None = None
@@ -229,6 +298,8 @@ class PlaybackPage(QWidget):
         self._snapshot_load_timer = QTimer(self)
         self._snapshot_load_timer.setSingleShot(True)
         self._snapshot_load_timer.timeout.connect(self._consume_snapshot_rows)
+        self._clip_index_worker: _ClipIndexWorker | None = None
+        self._clip_index_dirty = True
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -483,7 +554,7 @@ QSlider::handle:horizontal {{
         media_tab_l.addWidget(self._media_open_folder_btn)
         media_l.addWidget(media_tab_bar)
 
-        self._media_stack = QStackedWidget()
+        self._media_stack = AnimatedStackedWidget()
 
         clips_tab = QWidget()
         ccv = QVBoxLayout(clips_tab)
@@ -592,6 +663,7 @@ QSlider::handle:horizontal {{
         self._switch_media_tab("clips")
 
     def on_activated(self) -> None:
+        self._clip_index_dirty = True
         self._refresh_clips_list()
         self._snapshots_dirty = True
         if self._active_media_tab == "snapshots":
@@ -599,10 +671,13 @@ QSlider::handle:horizontal {{
 
     def on_deactivated(self) -> None:
         self._seek_timer.stop()
+        self._snapshot_load_timer.stop()
         self._stop(wait_ms=1500)
 
     def on_unload(self) -> None:
         self._seek_timer.stop()
+        self._snapshot_load_timer.stop()
+        self._cleanup_clip_index_worker()
         self._stop(wait_ms=5000)
 
     def _open_file(self) -> None:
@@ -673,11 +748,21 @@ QSlider::handle:horizontal {{
         target = os.path.join("data", "snapshots") if key == "snapshots" else self._resolve_saved_clips_folder()
         try:
             os.makedirs(target, exist_ok=True)
-            os.startfile(os.path.abspath(target))  # type: ignore[attr-defined]
+            self._open_path_with_system(os.path.abspath(target))
             self._clip_status.setText(f"Opened folder: {target}")
         except Exception:
             logger.warning("Could not open media folder path=%s", target, exc_info=True)
             self._clip_status.setText("Could not open folder")
+
+    @staticmethod
+    def _open_path_with_system(path: str) -> None:
+        if sys.platform.startswith("win") and hasattr(os, "startfile"):
+            os.startfile(path)  # type: ignore[attr-defined]
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+            return
+        subprocess.Popen(["xdg-open", path])
 
     def _resolve_saved_clips_folder(self) -> str:
         # Prefer the selected clip so folder navigation matches what the user is viewing.
@@ -688,7 +773,7 @@ QSlider::handle:horizontal {{
 
         # Fall back to indexed clips (ordered by newest ts in DB).
         try:
-            for row in db.get_clips() or []:
+            for row in db.get_clips(limit=25) or []:
                 clip_path = str(row.get("path") or "")
                 if clip_path and os.path.isfile(clip_path):
                     return os.path.dirname(os.path.abspath(clip_path))
@@ -713,7 +798,7 @@ QSlider::handle:horizontal {{
         if not path or not os.path.exists(path):
             return
         try:
-            os.startfile(path)  # type: ignore[attr-defined]
+            self._open_path_with_system(path)
         except Exception:
             logger.debug("Could not open snapshot with default viewer path=%s", path, exc_info=True)
 
@@ -738,7 +823,7 @@ QSlider::handle:horizontal {{
         if self._snapshots_list:
             removed_row = -1
             removed_pair = None
-            for idx, (item, card) in enumerate(self._snapshot_cards):
+            for item, card in self._snapshot_cards:
                 item_path = item.data(Qt.ItemDataRole.UserRole)
                 if item_path == path:
                     removed_row = self._snapshots_list.row(item)
@@ -830,6 +915,7 @@ QSlider::handle:horizontal {{
             self._snapshot_load_timer.start(0)
 
     def _on_clip_saved(self, path: str) -> None:
+        self._clip_index_dirty = True
         self._refresh_clips_list()
         self._clip_status.setText(f"Saved: {os.path.basename(path)}")
 
@@ -845,6 +931,7 @@ QSlider::handle:horizontal {{
             self._playback_thread.set_plugins_enabled(state)
             self._playback_thread.set_record_enabled(self._record_toggle.isChecked())
             self._apply_playback_detection_filters()
+        self._sync_record_enabled()
 
     def _on_face_detection_toggled(self, state: bool) -> None:
         try:
@@ -853,6 +940,7 @@ QSlider::handle:horizontal {{
             logger.warning("Failed to persist playback face detection setting", exc_info=True)
         if self._playback_thread:
             self._playback_thread.set_face_detection_enabled(state)
+        self._sync_record_enabled()
 
     @staticmethod
     def _normalize_class_name(value: str) -> str:
@@ -902,12 +990,38 @@ QSlider::handle:horizontal {{
         self._playback_thread.set_disabled_object_classes(self._disabled_playback_classes)
 
     def _on_record_toggled(self, state: bool) -> None:
+        if state and not self._is_record_allowed():
+            self._record_toggle.blockSignals(True)
+            self._record_toggle.setChecked(False)
+            self._record_toggle.blockSignals(False)
+            self._clip_status.setText("Auto-Clip requires Face or Plugins to be enabled.")
+            with contextlib.suppress(sqlite3.Error, OSError, ValueError):
+                db.set_setting("playback_record_enabled", False)
+            return
         try:
             db.set_setting("playback_record_enabled", bool(state))
         except (sqlite3.Error, OSError, ValueError):
             logger.warning("Failed to persist playback record setting", exc_info=True)
         if self._playback_thread:
             self._playback_thread.set_record_enabled(state)
+
+    def _is_record_allowed(self) -> bool:
+        return bool(self._detect_toggle.isChecked() or (self._face_detect_toggle and self._face_detect_toggle.isChecked()))
+
+    def _sync_record_enabled(self) -> None:
+        allowed = self._is_record_allowed()
+        self._record_toggle.setEnabled(allowed)
+        self._record_toggle.setToolTip(
+            "Saves a clip when a rule fires." if allowed else "Enable Face or Plugins before Auto-Clip."
+        )
+        if not allowed and self._record_toggle.isChecked():
+            self._record_toggle.blockSignals(True)
+            self._record_toggle.setChecked(False)
+            self._record_toggle.blockSignals(False)
+            with contextlib.suppress(sqlite3.Error, OSError, ValueError):
+                db.set_setting("playback_record_enabled", False)
+            if self._playback_thread:
+                self._playback_thread.set_record_enabled(False)
 
     def _load_playback_toggle_settings(self) -> None:
         try:
@@ -929,15 +1043,17 @@ QSlider::handle:horizontal {{
             except (sqlite3.Error, OSError, ValueError):
                 logger.warning("Failed to normalize playback class filters", exc_info=True)
             self._detect_toggle.setChecked(bool(plugins))
-            self._record_toggle.setChecked(bool(rec))
             if self._face_detect_toggle:
                 self._face_detect_toggle.setChecked(bool(face))
+            self._record_toggle.setChecked(bool(rec and (plugins or face)))
+            self._sync_record_enabled()
         except (sqlite3.Error, OSError, ValueError):
             logger.warning("Failed to load playback toggle settings", exc_info=True)
             self._detect_toggle.setChecked(False)
             self._record_toggle.setChecked(False)
             if self._face_detect_toggle:
                 self._face_detect_toggle.setChecked(True)
+            self._sync_record_enabled()
 
     def _on_finished(self, camera_id=None) -> None:
         self._sync_play_button(paused=True)
@@ -1328,48 +1444,52 @@ QSlider::handle:horizontal {{
 
     @staticmethod
     def _parse_clip_filename(name: str) -> tuple[int | None, int | None, str]:
-        if name.startswith("clip_cam") and "_" in name:
-            try:
-                rest = name.replace("clip_cam", "", 1)
-                cam_part, ts_part = rest.split("_", 1)
-                cam_id = int(cam_part)
-                ts = int(ts_part.split(".", 1)[0])
-                return cam_id, ts, "live"
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                return None, None, "live"
-        if name.startswith("clip_"):
-            try:
-                ts = int(name.replace("clip_", "", 1).split(".", 1)[0])
-                return None, ts, "playback"
-            except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                return None, None, "playback"
-        return None, None, "playback"
+        return _parse_clip_filename_parts(name)
 
     def _sync_clips_index(self) -> None:
-        try:
-            existing = {row.get("path") for row in db.get_clips() or []}
-        except (sqlite3.Error, OSError, TypeError, ValueError):
-            logger.warning("Failed to read existing clips index", exc_info=True)
-            existing = set()
-        for folder in ("data/clips_live", "data/clips"):
-            if not os.path.isdir(folder):
-                continue
-            for name in os.listdir(folder):
-                if not name.lower().endswith((".mp4", ".avi", ".mkv", ".mov", ".wmv")):
-                    continue
-                path = os.path.join(folder, name)
-                if path in existing:
-                    continue
-                cam_id, ts, source = self._parse_clip_filename(name)
-                if ts is None:
-                    try:
-                        ts = int(os.path.getmtime(path))
-                    except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
-                        ts = None
-                try:
-                    db.add_clip(path, source, cam_id, ts, None, [], [])
-                except (sqlite3.Error, OSError, TypeError, ValueError):
-                    logger.warning("Failed to index clip path=%s", path, exc_info=True)
+        self._ensure_clips_index_async()
+
+    def _ensure_clips_index_async(self) -> None:
+        if not self._clip_index_dirty:
+            return
+        if self._clip_index_worker is not None and self._clip_index_worker.isRunning():
+            return
+        self._clip_index_dirty = False
+        worker = _ClipIndexWorker(self)
+        self._clip_index_worker = worker
+
+        def _done():
+            self._clip_index_worker = None
+            worker.deleteLater()
+            self._refresh_clips_list()
+
+        worker.finished.connect(_done)
+        worker.start()
+
+    def _cleanup_clip_index_worker(self) -> None:
+        worker = self._clip_index_worker
+        self._clip_index_worker = None
+        if worker is None:
+            return
+        with contextlib.suppress(Exception):
+            worker.finished_index.disconnect()
+        with contextlib.suppress(Exception):
+            worker.finished.disconnect()
+        with contextlib.suppress(Exception):
+            worker.cancel()
+        if worker.isRunning():
+            worker.setParent(None)
+            _RETIRED_CLIP_INDEX_WORKERS.add(worker)
+
+            def _cleanup(w=worker):
+                _RETIRED_CLIP_INDEX_WORKERS.discard(w)
+                with contextlib.suppress(Exception):
+                    w.deleteLater()
+
+            worker.finished.connect(_cleanup)
+        else:
+            with contextlib.suppress(Exception):
+                worker.deleteLater()
 
     def _refresh_clips_list(self) -> None:
         selected_path = None
@@ -1378,7 +1498,7 @@ QSlider::handle:horizontal {{
             selected_path = cur.data(Qt.ItemDataRole.UserRole)
         self._clips_list.clear()
         self._clip_cards.clear()
-        self._sync_clips_index()
+        self._ensure_clips_index_async()
         filters = self._get_clip_filter_values()
         try:
             rows = db.get_clips(
@@ -1388,6 +1508,7 @@ QSlider::handle:horizontal {{
                 face_label=filters["face_label"],
                 object_type=filters["object_type"],
                 rule_triggered=filters["rule_triggered"],
+                limit=500,
             )
         except (sqlite3.Error, OSError, TypeError, ValueError):
             logger.warning("Failed to load filtered clips", exc_info=True)
@@ -1467,7 +1588,9 @@ QSlider::handle:horizontal {{
         except (RuntimeError, AttributeError, TypeError, ValueError, OSError) as e:
             logger.exception("Unexpected clip deletion failure path=%s", path)
             self._clip_status.setText(f"Delete failed: {e}")
+        self._clip_index_dirty = True
         self._refresh_clips_list()
+
     def _start_playback(self, path: str) -> None:
         self._stop(wait_ms=120)
         self._path_edit.setText(path)

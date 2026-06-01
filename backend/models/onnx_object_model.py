@@ -2,6 +2,7 @@ import ast
 import json
 import logging
 import os
+import threading
 
 import numpy as np
 
@@ -52,6 +53,9 @@ class ONNXObjectModel:
         self._using_cpu_fallback = False
         self._last_provider: str | None = None
         self._last_error: str | None = None
+        self._run_lock = threading.Lock()
+        self._selected_providers: list[str] = []
+        self._session_options = None
 
     def load(self):
         try:
@@ -104,6 +108,7 @@ class ONNXObjectModel:
                 providers.append(gpu_provider)
             if "CPUExecutionProvider" in avail or not providers:
                 providers.append("CPUExecutionProvider")
+            self._selected_providers = list(providers)
 
             _logger.info("Available ORT providers: %s | selected: %s", avail, providers)
 
@@ -112,6 +117,7 @@ class ONNXObjectModel:
             so.intra_op_num_threads = 2
             so.inter_op_num_threads = 1
             so.log_severity_level = 3
+            self._session_options = so
 
             try:
                 self._session = ort.InferenceSession(self._weight_path, sess_options=so, providers=providers)
@@ -250,14 +256,27 @@ class ONNXObjectModel:
     def last_error(self):
         return self._last_error
 
-    def detect(self, frame):
+    def _has_preferred_gpu_provider(self) -> bool:
+        return any(p and p != "CPUExecutionProvider" for p in self._selected_providers)
+
+    def detect(self, frame, min_conf: float | None = None):
         if not self._loaded:
             return []
+        if not self._run_lock.acquire(blocking=False):
+            self._last_error = "inference skipped: previous object inference is still running"
+            return []
 
+        try:
+            return self._detect_locked(frame, min_conf=min_conf)
+        finally:
+            self._run_lock.release()
+
+    def _detect_locked(self, frame, min_conf: float | None = None):
         import cv2
 
         h, w = frame.shape[:2]
         inp_w, inp_h = self._input_shape
+        score_thresh = max(0.0, min(1.0, float(self._confidence if min_conf is None else min_conf)))
 
         img = cv2.dnn.blobFromImage(
             frame,
@@ -272,21 +291,11 @@ class ONNXObjectModel:
             outs = self._session.run(None, {self._input_name: img})
         except Exception as e:
             self._last_error = f"inference error on {self._last_provider or 'unknown'}: {e}"
-            if not self._using_cpu_fallback:
-                _logger.warning("Inference failed with DML, switching to CPU permanently: %s", e)
-                try:
-                    import onnxruntime as ort
-
-                    self._session = ort.InferenceSession(self._weight_path, providers=["CPUExecutionProvider"])
-                    self._using_cpu_fallback = True
-                    self._last_provider = "CPUExecutionProvider"
-                    outs = self._session.run(None, {self._input_name: img})
-                except Exception:
-                    _logger.exception("CPU fallback also failed")
-                    return []
-            else:
-                _logger.exception("CPU inference failed")
+            if self._has_preferred_gpu_provider() and self._last_provider != "CPUExecutionProvider":
+                _logger.warning("Inference failed on %s; skipping object frame instead of falling back to CPU: %s", self._last_provider, e)
                 return []
+            _logger.exception("CPU/object inference failed")
+            return []
 
         if not outs:
             return []
@@ -310,7 +319,7 @@ class ONNXObjectModel:
                 cls_ids = np.argmax(class_probs, axis=1).astype(np.int32, copy=False)
                 row_idx = np.arange(class_probs.shape[0], dtype=np.int32)
                 cls_scores = class_probs[row_idx, cls_ids]
-                keep = cls_scores >= float(self._confidence)
+                keep = cls_scores >= score_thresh
 
                 if np.any(keep):
                     kept = out[keep]
@@ -340,7 +349,7 @@ class ONNXObjectModel:
 
         if boxes_xywh:
             try:
-                idxs = cv2.dnn.NMSBoxes(boxes_xywh, scores, self._confidence, 0.45)
+                idxs = cv2.dnn.NMSBoxes(boxes_xywh, scores, score_thresh, 0.45)
                 idxs = np.array(idxs).flatten().tolist() if len(idxs) > 0 else []
             except Exception:
                 idxs = list(range(len(boxes_xyxy)))

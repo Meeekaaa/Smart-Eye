@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 
 from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDialog,
     QHBoxLayout,
     QLayout,
     QLabel,
@@ -17,19 +14,17 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from backend.repository import db
 from frontend.services.rules_service import RulesService
 from frontend.app_theme import safe_set_point_size
 from frontend.icon_theme import themed_icon_pixmap
-from frontend.dialogs import apply_popup_theme
+from frontend.widgets.animated_stack import AnimatedStackedWidget
 
 from frontend.styles._colors import _ACCENT_BG_22, _MUTED_BG_25
-from frontend.styles._btn_styles import _SECONDARY_BTN, _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
+from frontend.styles._btn_styles import _SEGMENT_TAB_BAR, _SEGMENT_TAB_BTN
 from frontend.styles._input_styles import _SEARCH_INPUT
 from frontend.styles.page_styles import header_bar_style, saved_clips_scrollbar_style, splitter_handle_style, text_style, toolbar_style
 from frontend.ui_tokens import (
@@ -37,7 +32,6 @@ from frontend.ui_tokens import (
     FONT_SIZE_9,
     FONT_SIZE_BODY,
     FONT_SIZE_CAPTION,
-    FONT_SIZE_HEADING,
     FONT_SIZE_LARGE,
     FONT_WEIGHT_BOLD,
     FONT_WEIGHT_HEAVY,
@@ -54,8 +48,6 @@ from frontend.ui_tokens import (
     SIZE_PANEL_MIN,
     SIZE_SECTION_TALL,
     SPACE_10,
-    SPACE_14,
-    SPACE_20,
     SPACE_3,
     SPACE_5,
     SPACE_6,
@@ -72,14 +64,11 @@ from ._constants import (
     _BG_BASE,
     _BG_SURFACE,
     _BORDER_DIM,
-    _DANGER,
     _PRIMARY_BTN,
     _STYLESHEET,
-    _SUCCESS,
     _TEXT_MUTED,
     _TEXT_PRI,
     _TEXT_SEC,
-    _make_separator,
 )
 from ._detail_panel import RuleDetailPanel
 from ._forms import NewRulePanel
@@ -104,9 +93,6 @@ _COUNT_BADGE_ACTIVE_STYLE = (
 )
 _EMPTY_TITLE_STYLE = text_style(_TEXT_SEC, size=FONT_SIZE_BODY, weight=FONT_WEIGHT_BOLD)
 _EMPTY_SUB_STYLE = text_style(_TEXT_MUTED, size=FONT_SIZE_CAPTION)
-_SIM_TITLE_STYLE = text_style(_TEXT_PRI, size=FONT_SIZE_HEADING, weight=FONT_WEIGHT_BOLD)
-_SIM_LABEL_STYLE = text_style(_TEXT_SEC)
-_SIM_RESULT_STYLE = text_style(_TEXT_SEC, extra=f"background: transparent; padding: {SPACE_10}px;")
 _SHARED_MANAGER_LAYOUT_APP = "ManagerLayout"
 _SHARED_SPLITTER_LEFT_KEY = "splitter/left_width"
 _DEFAULT_SPLITTER_LEFT = 340
@@ -186,7 +172,7 @@ class RulesManagerPage(QWidget):
         simulate_btn = QPushButton("Simulate")
         simulate_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
         simulate_btn.setStyleSheet(_PRIMARY_BTN)
-        simulate_btn.clicked.connect(self._simulate_dialog)
+        simulate_btn.clicked.connect(self._open_simulation_panel)
         hl.addWidget(simulate_btn)
 
         new_btn = QPushButton("+  Add Rule")
@@ -288,7 +274,7 @@ class RulesManagerPage(QWidget):
         self._detail_panel.saved.connect(self._on_rule_saved)
         self._detail_panel.close_requested.connect(self._close_detail)
 
-        self._right_stack = QStackedWidget()
+        self._right_stack = AnimatedStackedWidget()
         self._right_stack.addWidget(self._detail_panel)
 
         self._splitter.addWidget(left_panel)
@@ -405,7 +391,7 @@ class RulesManagerPage(QWidget):
                 rule,
                 is_active=is_active,
                 on_stop_sounds=self._stop_alarm_sounds,
-                on_toggle_changed=self._refresh,
+                on_toggle_changed=self._set_rule_enabled,
             )
             card.clicked.connect(self._on_card_clicked)
             self._roster_vbox.addWidget(card)
@@ -413,6 +399,13 @@ class RulesManagerPage(QWidget):
 
 
         self._roster_vbox.addStretch(1)
+
+    def _set_rule_enabled(self, rule_id: int, enabled: bool):
+        try:
+            self._rules_service.set_rule_enabled(rule_id, enabled)
+        except (RuntimeError, AttributeError, TypeError, ValueError, OSError):
+            logger.exception("Failed to toggle rule %s", rule_id)
+        self._refresh()
 
     def _on_card_clicked(self, rule_id: int):
         self._active_rule_id = rule_id
@@ -479,96 +472,9 @@ class RulesManagerPage(QWidget):
         except (ImportError, RuntimeError, OSError):
             logger.warning("Failed to stop alarm sounds", exc_info=True)
 
-    def _simulate_dialog(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Simulate Rule")
-        dlg.setMinimumSize(500, 400)
-        apply_popup_theme(dlg, _STYLESHEET)
-        layout = QVBoxLayout(dlg)
-        layout.setContentsMargins(SPACE_XL, SPACE_20, SPACE_XL, SPACE_20)
-        layout.setSpacing(SPACE_14)
-
-        title_lbl = QLabel("Simulate Rule")
-        title_lbl.setStyleSheet(_SIM_TITLE_STYLE)
-        layout.addWidget(title_lbl)
-        layout.addWidget(_make_separator())
-
-        lbl = QLabel("Select a rule and a detection log to test:")
-        lbl.setStyleSheet(_SIM_LABEL_STYLE)
-        layout.addWidget(lbl)
-
-        rule_combo = QComboBox()
-        for r in db.get_rules():
-            rule_combo.addItem(r["name"], r["id"])
-        layout.addWidget(rule_combo)
-
-        log_combo = QComboBox()
-        for log in db.get_detection_logs(limit=50):
-            label = f"#{log['id']} — {log.get('timestamp', '')} — {log.get('identity', 'Unknown')}"
-            log_combo.addItem(label, log)
-        layout.addWidget(log_combo)
-
-        result_label = QLabel("")
-        result_label.setWordWrap(True)
-        result_label.setStyleSheet(_SIM_RESULT_STYLE)
-        layout.addWidget(result_label)
-
-        def run_sim():
-            rid = rule_combo.currentData()
-            log_data = log_combo.currentData()
-            if rid is None or log_data is None:
-                return
-            detections = log_data.get("detections", "{}")
-            if isinstance(detections, str):
-                detections = json.loads(detections)
-
-            # Reconstruct minimal object list from persisted detections for object/objects rule simulation.
-            obj_boxes = []
-            for key, val in (detections or {}).items():
-                if key in ("identity", "gender"):
-                    continue
-                if isinstance(val, bool):
-                    if val:
-                        obj_boxes.append({"class_name": key})
-                    continue
-                if isinstance(val, (int, float)):
-                    cnt = max(0, int(val))
-                    for _ in range(cnt):
-                        obj_boxes.append({"class_name": key})
-
-            passed, details = self._rules_service.simulate_rule(
-                rid,
-                {
-                    "detections": detections,
-                    "object_bboxes": obj_boxes,
-                },
-            )
-            text = f"Result: {'TRIGGERED' if passed else 'NOT TRIGGERED'}\n\n"
-            text += "\n".join(details) if isinstance(details, list) else str(details)
-            result_label.setText(text)
-            result_label.setStyleSheet(
-                text_style(
-                    _SUCCESS if passed else _DANGER,
-                    size=FONT_SIZE_BODY,
-                    extra=f"background: transparent; padding: {SPACE_10}px;",
-                )
-            )
-
-        sim_btn = QPushButton("Run Simulation")
-        sim_btn.setStyleSheet(_PRIMARY_BTN)
-        sim_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        sim_btn.clicked.connect(run_sim)
-        layout.addStretch()
-
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet(_SECONDARY_BTN)
-        close_btn.setFixedSize(SIZE_BTN_W_LG, SIZE_CONTROL_MD)
-        close_btn.clicked.connect(dlg.accept)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.setSpacing(SPACE_SM)
-        btn_row.addWidget(sim_btn)
-        btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
-
-        dlg.exec()
+    def _open_simulation_panel(self):
+        if self._active_rule_id is None and self._all_rules:
+            self._on_card_clicked(self._all_rules[0]["id"])
+        if self._active_rule_id is not None:
+            self._right_stack.setCurrentIndex(0)
+            self._detail_panel.open_simulation()
