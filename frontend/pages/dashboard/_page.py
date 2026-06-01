@@ -134,16 +134,16 @@ class DashboardPage(QWidget):
         self._start_btn = QPushButton("Start All")
         self._start_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._start_btn.setMinimumWidth(SIZE_BTN_W_135)
+        self._start_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._start_btn.setStyleSheet(_PRIMARY_BTN)
         self._start_btn.clicked.connect(self._start_all)
-        _hl.addWidget(self._start_btn)
 
         self._stop_btn = QPushButton("Stop All")
         self._stop_btn.setFixedHeight(SIZE_CONTROL_MD)
         self._stop_btn.setMinimumWidth(SIZE_BTN_W_135)
+        self._stop_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._stop_btn.setStyleSheet(_DANGER_BTN)
         self._stop_btn.clicked.connect(self._stop_all)
-        _hl.addWidget(self._stop_btn)
 
         root.addWidget(_header_w)
 
@@ -226,6 +226,12 @@ class DashboardPage(QWidget):
         right_panel = QVBoxLayout(right_widget)
         right_panel.setContentsMargins(SPACE_MD, SPACE_LG, SPACE_XL, SPACE_XL)
         right_panel.setSpacing(SPACE_LG)
+
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(SPACE_SM)
+        actions_row.addWidget(self._start_btn, stretch=1)
+        actions_row.addWidget(self._stop_btn, stretch=1)
+        right_panel.addLayout(actions_row)
 
         alarms_header = QHBoxLayout()
         alarms_header.setSpacing(SPACE_SM)

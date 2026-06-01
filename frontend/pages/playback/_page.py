@@ -9,6 +9,7 @@ import contextlib
 import json
 import ast
 import time
+from datetime import datetime
 
 import cv2
 from PySide6.QtCore import Qt, QSize, QSettings, QTimer, QEvent, QDate, QThread, Signal
@@ -246,6 +247,32 @@ def _icon_btn(icon_path: str, size: int = 36, danger: bool = False) -> QPushButt
         btn.setIcon(QIcon(pix))
         btn.setIconSize(QSize(int(size * 0.52), int(size * 0.52)))
     return btn
+
+
+def _snapshot_epoch(value, path: str) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+
+    text = str(value or "").strip()
+    if text:
+        with contextlib.suppress(TypeError, ValueError):
+            return int(float(text))
+
+        normalized = text.replace("Z", "+00:00")
+        candidates = [normalized]
+        if " " in normalized and "T" not in normalized:
+            candidates.append(normalized.replace(" ", "T", 1))
+        for candidate in candidates:
+            with contextlib.suppress(ValueError):
+                return int(datetime.fromisoformat(candidate).timestamp())
+
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S"):
+            with contextlib.suppress(ValueError):
+                return int(datetime.strptime(text, fmt).timestamp())
+
+    with contextlib.suppress(RuntimeError, AttributeError, TypeError, ValueError, OSError):
+        return int(os.path.getmtime(path) or 0)
+    return 0
 
 
 def _set_list_active(list_widget: QListWidget, item: QListWidgetItem, activate_cb) -> None:
@@ -863,7 +890,7 @@ QSlider::handle:horizontal {{
                 for row in db.get_detection_logs(limit=max(10, int(limit))):
                     p = str(row.get("snapshot_path") or "").strip()
                     if p and os.path.exists(p):
-                        ts = int(row.get("timestamp") or os.path.getmtime(p) or 0)
+                        ts = _snapshot_epoch(row.get("timestamp"), p)
                         camera_name = str(row.get("camera_name") or f"Camera {row.get('camera_id') or '-'}")
                         rules_raw = row.get("rules_triggered")
                         rule_text = "No rule context"
