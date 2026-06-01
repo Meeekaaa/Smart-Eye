@@ -407,7 +407,7 @@ class PlaybackPage(QWidget):
         )
         tl.addWidget(rec_lbl)
         self._record_toggle = ToggleSwitch()
-        self._record_toggle.setToolTip("Saves a clip to data/clips/ when a rule fires. Requires Face or Plugins ON.")
+        self._record_toggle.setToolTip("Keeps a rolling buffer and saves the previous 5 seconds when a rule fires. Requires Face or Plugins ON.")
         self._record_toggle.toggled.connect(self._on_record_toggled)
         tl.addWidget(self._record_toggle)
         self._load_playback_toggle_settings()
@@ -1012,7 +1012,7 @@ QSlider::handle:horizontal {{
         allowed = self._is_record_allowed()
         self._record_toggle.setEnabled(allowed)
         self._record_toggle.setToolTip(
-            "Saves a clip when a rule fires." if allowed else "Enable Face or Plugins before Auto-Clip."
+            "Saves the previous 5 seconds when a rule fires." if allowed else "Enable Face or Plugins before Auto-Clip."
         )
         if not allowed and self._record_toggle.isChecked():
             self._record_toggle.blockSignals(True)
@@ -1026,7 +1026,7 @@ QSlider::handle:horizontal {{
     def _load_playback_toggle_settings(self) -> None:
         try:
             plugins = db.get_bool("playback_plugins_enabled", db.get_bool("playback_detection_enabled", False))
-            rec = db.get_bool("playback_record_enabled", False)
+            rec = db.get_bool("playback_record_enabled", True)
             face = db.get_bool("playback_face_detection_enabled", True)
             raw_disabled = db.get_setting("playback_disabled_object_classes", [])
             if isinstance(raw_disabled, str):

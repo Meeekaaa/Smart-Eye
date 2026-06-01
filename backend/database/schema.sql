@@ -252,10 +252,11 @@ INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_on_leave', '1', 'bool', 'U
 INSERT OR IGNORE INTO app_settings VALUES ('ui_unload_idle_min', '5', 'int', 'Unload idle tabs after (min)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('auto_pause_live_when_idle', '0', 'bool', 'Auto-stop live cameras when idle', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('detection_interval', '1', 'int', 'Detection Interval', 'performance');
-INSERT OR IGNORE INTO app_settings VALUES ('live_clip_enabled', '0', 'bool', 'Save Live Alarm Clips', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('live_clip_enabled', '1', 'bool', 'Save Live Alarm Clips', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_seconds', '5', 'int', 'Live Clip Seconds', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_max_buffer_mb', '128', 'int', 'Live Clip Buffer Limit (MB)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('live_clip_buffer_max_dim', '640', 'int', 'Live Clip Buffer Max Dimension', 'performance');
+INSERT OR IGNORE INTO app_settings VALUES ('playback_record_enabled', '1', 'bool', 'Playback Auto-Clip', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('ui_live_render_fps', '15', 'float', 'Live View Render FPS', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('inference_future_timeout_sec', '2.0', 'float', 'Inference Timeout (seconds)', 'performance');
 INSERT OR IGNORE INTO app_settings VALUES ('adaptive_live_infer_interval', '1', 'bool', 'Adaptive Live Inference Interval', 'performance');

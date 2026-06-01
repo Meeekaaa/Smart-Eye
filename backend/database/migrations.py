@@ -5,7 +5,7 @@ import secrets
 import uuid
 
 
-CURRENT_VERSION = 45
+CURRENT_VERSION = 46
 
 
 def apply(conn):
@@ -101,7 +101,37 @@ def apply(conn):
         _migrate_v44(conn)
     if version < 45:
         _migrate_v45(conn)
+    if version < 46:
+        _migrate_v46(conn)
     conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
+    conn.commit()
+
+
+def _migrate_v46(conn):
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("live_clip_enabled", "1", "bool", "Save Live Alarm Clips", "performance"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value=?, type=?, label=?, section=? WHERE key=?",
+        ("1", "bool", "Save Live Alarm Clips", "performance", "live_clip_enabled"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("live_clip_seconds", "5", "int", "Live Clip Seconds", "performance"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET value=?, type=?, label=?, section=? WHERE key=?",
+        ("5", "int", "Live Clip Seconds", "performance", "live_clip_seconds"),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO app_settings (key, value, type, label, section) VALUES (?, ?, ?, ?, ?)",
+        ("playback_record_enabled", "1", "bool", "Playback Auto-Clip", "performance"),
+    )
+    conn.execute(
+        "UPDATE app_settings SET type=?, label=?, section=? WHERE key=?",
+        ("bool", "Playback Auto-Clip", "performance", "playback_record_enabled"),
+    )
     conn.commit()
 
 

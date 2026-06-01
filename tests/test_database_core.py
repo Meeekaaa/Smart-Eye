@@ -16,6 +16,9 @@ def test_schema_migrations_and_defaults(temp_db):
     assert defaults["theme"]["value"] == "dark"
     assert defaults["liveness_check_global"]["value"] == "0"
     assert "liveness_enabled" not in temp_db.get_setting_defaults()
+    assert temp_db.get_bool("live_clip_enabled", False) is True
+    assert temp_db.get_int("live_clip_seconds", 0) == 5
+    assert temp_db.get_bool("playback_record_enabled", False) is True
 
 
 def test_detection_log_normalizes_gender_and_identity(temp_db):

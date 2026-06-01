@@ -16,6 +16,9 @@ from backend.pipeline.inference_utils import build_state
 from backend.repository import db
 from backend.services.pipeline_service import PipelineService
 
+_AUTO_CLIP_SECONDS = 5
+_AUTO_CLIP_LATENCY_SLACK_SECONDS = 5
+
 
 class PlaybackThread(QThread):
     frame_ready = Signal(int, np.ndarray, dict)
@@ -92,7 +95,7 @@ class PlaybackThread(QThread):
             self._infer_target_fps,
             infer_stride,
         )
-        buf_max = int(video_fps * 5)
+        buf_max = max(1, int(video_fps * (_AUTO_CLIP_SECONDS + _AUTO_CLIP_LATENCY_SLACK_SECONDS)))
         detector = get_manager()
         pipeline = PipelineService(self._camera_id)
         infer_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"play-infer-cam{self._camera_id}")
@@ -150,8 +153,8 @@ class PlaybackThread(QThread):
                 self._detection_events.append(event)
                 self.detection_event.emit(self._camera_id, frame_idx, state)
                 if self._record_enabled and self._frame_buffer and _clip_cooldown <= 0:
-                    if self._save_clip(video_fps, state, [r.get("name") for r in trig]):
-                        _clip_cooldown = int(video_fps * 5)
+                    if self._save_clip(video_fps, state, [r.get("name") for r in trig], event_frame_idx=frame_idx):
+                        _clip_cooldown = int(video_fps * _AUTO_CLIP_SECONDS)
 
             primary_state["_triggered"] = triggered
             pipeline.handle_result(
@@ -187,7 +190,7 @@ class PlaybackThread(QThread):
                 break
 
             if self._record_enabled and not self._paused:
-                self._frame_buffer.append(frame.copy())
+                self._frame_buffer.append((frame_idx, frame.copy()))
                 while len(self._frame_buffer) > buf_max:
                     self._frame_buffer.popleft()
 
@@ -284,14 +287,44 @@ class PlaybackThread(QThread):
         if self._cap:
             self._cap.release()
 
-    def _save_clip(self, fps: float, state: dict | None = None, rules: list[str] | None = None) -> str | None:
+    def _buffered_clip_frames(self, fps: float, event_frame_idx: int | None = None) -> list[np.ndarray]:
+        entries = list(self._frame_buffer)
+        if not entries:
+            return []
+        max_frames = max(1, int(float(fps or 30.0) * _AUTO_CLIP_SECONDS))
+        if event_frame_idx is None:
+            selected = entries[-max_frames:]
+        else:
+            start_idx = int(event_frame_idx) - max_frames + 1
+            selected = [
+                entry
+                for entry in entries
+                if isinstance(entry, tuple) and start_idx <= int(entry[0]) <= int(event_frame_idx)
+            ]
+        if not selected:
+            selected = entries[-max_frames:]
+        out = []
+        for entry in selected:
+            if isinstance(entry, tuple):
+                out.append(entry[1])
+            else:
+                out.append(entry)
+        return out
+
+    def _save_clip(
+        self,
+        fps: float,
+        state: dict | None = None,
+        rules: list[str] | None = None,
+        event_frame_idx: int | None = None,
+    ) -> str | None:
         try:
             if not db.can_persist_events():
                 logging.getLogger(__name__).warning("Playback clip skipped: database size limit is reached")
                 return None
             os.makedirs("data/clips", exist_ok=True)
             fname = os.path.join("data", "clips", f"clip_{int(time.time())}.mp4")
-            frames = list(self._frame_buffer)
+            frames = self._buffered_clip_frames(fps, event_frame_idx=event_frame_idx)
             if not frames:
                 logging.getLogger(__name__).warning("Playback: no buffered frames; skipping clip save")
                 return None
@@ -358,9 +391,7 @@ class PlaybackThread(QThread):
         self._disabled_object_classes = {str(v).strip().lower() for v in (class_names or set()) if str(v).strip()}
 
     def set_record_enabled(self, enabled: bool):
-        self._record_enabled = enabled
-        if not enabled:
-            self._frame_buffer.clear()
+        self._record_enabled = bool(enabled)
 
     def set_fps_limit(self, fps_limit: float) -> None:
         self._fps_lock.lock()
