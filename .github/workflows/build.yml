@@ -2,6 +2,22 @@ name: Build SmartEye
 
 on:
   workflow_dispatch:
+    inputs:
+      create_installer:
+        description: "Build an NSIS installer in addition to the portable app zip"
+        required: true
+        type: boolean
+        default: true
+      create_release:
+        description: "Create or update a GitHub Release with the production artifacts"
+        required: true
+        type: boolean
+        default: false
+      compress_with_upx:
+        description: "Compress SmartEye.exe with UPX before packaging"
+        required: true
+        type: boolean
+        default: false
   pull_request:
   push:
     branches:
@@ -294,6 +310,7 @@ jobs:
           assume-yes-for-downloads: true
 
       - name: Compress executable with UPX
+        if: ${{ inputs.compress_with_upx }}
         shell: pwsh
         run: |
           choco install upx -y
@@ -307,6 +324,7 @@ jobs:
           }
 
       - name: Create NSIS Installer
+        if: ${{ inputs.create_installer }}
         shell: pwsh
         run: |
           choco install nsis -y
@@ -328,6 +346,7 @@ jobs:
           SetCompressorDictSize 64
           
           Name "`${APPNAME} Setup"
+          RequestExecutionLevel admin
           
           !define MUI_ICON "frontend\assets\icons\icon.ico"
           !define MUI_UNICON "frontend\assets\icons\icon.ico"
@@ -387,41 +406,88 @@ jobs:
           
           Write-Host "Installer created successfully!"
 
-      - name: Collect release files
-        id: release_files
+      - name: Collect production artifacts
+        id: production_artifacts
         shell: pwsh
         run: |
           $appInfo = Get-Content app_info.json | ConvertFrom-Json
           $appName = $appInfo.name
           $appVersion = $appInfo.version
           $appBuild = Get-Date -Format "yyyyMMdd"
+          $artifactDir = Join-Path $PWD "build\artifacts"
+          New-Item -Path $artifactDir -ItemType Directory -Force | Out-Null
+
+          $distDir = Get-ChildItem -Path (Join-Path $PWD 'build') -Directory -Filter *.dist | Select-Object -First 1
+          if (-not $distDir) {
+            throw "No .dist folder found"
+          }
+
+          $portableStageRoot = Join-Path $env:RUNNER_TEMP "smarteye-portable"
+          $portableAppRoot = Join-Path $portableStageRoot "SmartEye"
+          Remove-Item -Path $portableStageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -Path $portableAppRoot -ItemType Directory -Force | Out-Null
+          Copy-Item -Path (Join-Path $distDir.FullName '*') -Destination $portableAppRoot -Recurse -Force
+
+          @"
+          SmartEye portable production build
+
+          Run SmartEye.exe from this folder.
+          Keep the files and folders together; the executable depends on the bundled runtime files.
+          If Windows SmartScreen appears, choose More info, then Run anyway for your own test build.
+          "@ | Out-File -FilePath (Join-Path $portableAppRoot "README_FIRST.txt") -Encoding UTF8
+
+          $portablePath = Join-Path $artifactDir "$appName-$appVersion-$appBuild-windows-portable.zip"
+          Compress-Archive -Path $portableAppRoot -DestinationPath $portablePath -Force
 
           $installerPath = Join-Path $PWD "build\SmartEyeInstaller.exe"
-          if (-not (Test-Path $installerPath)) {
-            throw "Installer not found at $installerPath"
+          $packagedInstallerPath = ""
+          if (Test-Path $installerPath) {
+            $packagedInstallerPath = Join-Path $artifactDir "$appName-$appVersion-$appBuild-windows-installer.exe"
+            Copy-Item -LiteralPath $installerPath -Destination $packagedInstallerPath -Force
+          } else {
+            Write-Host "Installer not found; portable zip will still be uploaded."
           }
 
           "app_name=$appName"             | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "app_version=$appVersion"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "app_build=$appBuild"           | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "installer_path=$installerPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "portable_path=$portablePath"   | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "installer_path=$packagedInstallerPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+          Write-Host "Production artifacts:"
+          Get-ChildItem -Path $artifactDir -File | ForEach-Object {
+            Write-Host " - $($_.FullName) ($($_.Length) bytes)"
+          }
+
+      - name: Upload production artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartEye-windows-production-${{ steps.production_artifacts.outputs.app_version }}-${{ steps.production_artifacts.outputs.app_build }}
+          path: build/artifacts/*
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Create or update release
+        if: ${{ inputs.create_release }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $appName = "${{ steps.release_files.outputs.app_name }}"
-          $appVersion = "${{ steps.release_files.outputs.app_version }}"
-          $appBuild = "${{ steps.release_files.outputs.app_build }}"
+          $appName = "${{ steps.production_artifacts.outputs.app_name }}"
+          $appVersion = "${{ steps.production_artifacts.outputs.app_version }}"
+          $appBuild = "${{ steps.production_artifacts.outputs.app_build }}"
           $tag  = "v$appVersion"
           $name = "$appName v$appVersion (build $appBuild)"
           $repo = "${{ github.repository }}"
-          $installer = "${{ steps.release_files.outputs.installer_path }}"
+          $assets = @("${{ steps.production_artifacts.outputs.portable_path }}")
+          $installer = "${{ steps.production_artifacts.outputs.installer_path }}"
+          if ($installer -and (Test-Path $installer)) {
+            $assets += $installer
+          }
 
           gh release view $tag --repo $repo *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag $installer --repo $repo --title $name --generate-notes
+            gh release create $tag $assets --repo $repo --title $name --generate-notes
           } else {
-            gh release upload $tag $installer --repo $repo --clobber
+            gh release upload $tag $assets --repo $repo --clobber
           }
