@@ -791,10 +791,24 @@ def add_image_placeholder(document: Document, img_node: Tag, base_dir: Path) -> 
     add_paragraph(document, f"[Image placeholder: {alt} - {src}]")
 
 
-def add_centered_picture(document: Document, image_path: Path, width: float) -> None:
+def _image_dimensions(image_path: Path) -> tuple[int, int] | None:
+    try:
+        from PIL import Image
+
+        with Image.open(image_path) as image:
+            return image.size
+    except Exception:
+        return None
+
+
+def add_centered_picture(document: Document, image_path: Path, width: float, max_height: float | None = None) -> None:
     paragraph = document.add_paragraph()
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    paragraph.add_run().add_picture(str(image_path), width=Inches(width))
+    shape = paragraph.add_run().add_picture(str(image_path), width=Inches(width))
+    if max_height is not None and shape.height > Inches(max_height):
+        ratio = Inches(max_height) / shape.height
+        shape.width = int(shape.width * ratio)
+        shape.height = Inches(max_height)
 
 
 def add_caption(document: Document, text: str) -> None:
@@ -844,7 +858,12 @@ def add_math_to_docx(document: Document, node: Tag, math_dir: Path | None) -> No
     png_path = math_dir / f"equation-{idx + 1:02d}.png" if math_dir and idx >= 0 else None
     if png_path and png_path.exists():
         try:
-            add_centered_picture(document, png_path, width=4.2)
+            dimensions = _image_dimensions(png_path)
+            width = 4.2
+            if dimensions:
+                pixel_width, _pixel_height = dimensions
+                width = min(5.8, max(1.2, pixel_width / 170.0))
+            add_centered_picture(document, png_path, width=width, max_height=1.2)
             return
         except Exception:
             pass
@@ -1025,6 +1044,10 @@ def render_visual_assets(html_path: Path, mermaid_dir: Path, math_dir: Path) -> 
 
     mermaid_dir.mkdir(parents=True, exist_ok=True)
     math_dir.mkdir(parents=True, exist_ok=True)
+    for old_asset in mermaid_dir.glob("mermaid-*.png"):
+        old_asset.unlink(missing_ok=True)
+    for old_asset in math_dir.glob("equation-*.png"):
+        old_asset.unlink(missing_ok=True)
     browser_path = find_browser_executable()
     with sync_playwright() as playwright:
         launch_kwargs = {"headless": True}
@@ -1044,17 +1067,17 @@ def render_visual_assets(html_path: Path, mermaid_dir: Path, math_dir: Path) -> 
                 continue
             figure.screenshot(path=str(mermaid_dir / f"mermaid-{idx + 1:02d}.png"))
             rendered_diagrams += 1
-        equations = page.locator(".math.display svg")
+        equations = page.locator(".math.display")
         equation_count = equations.count()
-        if equation_count == 0:
-            equations = page.locator(".math.display mjx-container")
-            equation_count = equations.count()
-        if equation_count == 0:
-            equations = page.locator(".math.display")
-            equation_count = equations.count()
         rendered_equations = 0
         for idx in range(equation_count):
-            equation = equations.nth(idx)
+            block = equations.nth(idx)
+            svg = block.locator("mjx-container > svg").nth(0)
+            if svg.count():
+                equation = svg
+            else:
+                container = block.locator("mjx-container").nth(0)
+                equation = container if container.count() else block
             box = equation.bounding_box()
             if not box or box["width"] <= 0 or box["height"] <= 0:
                 continue
