@@ -1007,14 +1007,6 @@ QSlider::handle:horizontal {{
         self._class_filters_btn.setText("Object Classes" if disabled_count <= 0 else f"Object Classes ({disabled_count} off)")
 
     def _on_record_toggled(self, state: bool) -> None:
-        if state and not self._is_record_allowed():
-            self._record_toggle.blockSignals(True)
-            self._record_toggle.setChecked(False)
-            self._record_toggle.blockSignals(False)
-            self._clip_status.setText("Auto-Clip requires Face or Plugins to be enabled.")
-            with contextlib.suppress(sqlite3.Error, OSError, ValueError):
-                db.set_setting("playback_record_enabled", False)
-            return
         try:
             db.set_setting("playback_record_enabled", bool(state))
         except (sqlite3.Error, OSError, ValueError):
@@ -1023,22 +1015,13 @@ QSlider::handle:horizontal {{
             self._playback_thread.set_record_enabled(state)
 
     def _is_record_allowed(self) -> bool:
-        return bool(self._detect_toggle.isChecked() or (self._face_detect_toggle and self._face_detect_toggle.isChecked()))
+        return True
 
     def _sync_record_enabled(self) -> None:
-        allowed = self._is_record_allowed()
-        self._record_toggle.setEnabled(allowed)
+        self._record_toggle.setEnabled(True)
         self._record_toggle.setToolTip(
-            "Saves the previous 5 seconds when a rule fires." if allowed else "Enable Face or Plugins before Auto-Clip."
+            "Saves the previous 5 seconds when a rule fires. Requires Face or Plugins ON for automatic triggers."
         )
-        if not allowed and self._record_toggle.isChecked():
-            self._record_toggle.blockSignals(True)
-            self._record_toggle.setChecked(False)
-            self._record_toggle.blockSignals(False)
-            with contextlib.suppress(sqlite3.Error, OSError, ValueError):
-                db.set_setting("playback_record_enabled", False)
-            if self._playback_thread:
-                self._playback_thread.set_record_enabled(False)
 
     def _load_playback_toggle_settings(self) -> None:
         try:
@@ -1063,7 +1046,7 @@ QSlider::handle:horizontal {{
             self._detect_toggle.setChecked(bool(plugins))
             if self._face_detect_toggle:
                 self._face_detect_toggle.setChecked(bool(face))
-            self._record_toggle.setChecked(bool(rec and (plugins or face)))
+            self._record_toggle.setChecked(bool(rec))
             self._sync_record_enabled()
         except (sqlite3.Error, OSError, ValueError):
             logger.warning("Failed to load playback toggle settings", exc_info=True)

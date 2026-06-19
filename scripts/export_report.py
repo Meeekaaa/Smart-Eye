@@ -257,7 +257,12 @@ def replace_math_blocks(markdown_text: str) -> str:
     def repl(match: re.Match[str]) -> str:
         nonlocal index
         equation = match.group(1).strip()
-        html_block = f'\n<div class="math display" data-equation-index="{index}">\\[{equation}\\]</div>\n'
+        desc_match = re.search(r'%\s*(.*)', equation)
+        description = desc_match.group(1).strip() if desc_match else f"Equation {index + 1}"
+        eq_clean = re.sub(r'\s*% .*', '', equation).strip()
+        num_match = re.search(r'\\qquad\s*\((\d+)\)', eq_clean)
+        eq_number = num_match.group(1) if num_match else str(index + 1)
+        html_block = f'\n<div class="math display" data-equation-index="{index}" data-equation-number="{eq_number}" data-equation-description="{description}">\\[{eq_clean}\\]</div>\n'
         index += 1
         return html_block
 
@@ -301,20 +306,20 @@ def infer_code_listing_title(code_text: str, language: str, fallback_index: int)
     checks = [
         ("export_model.export", "Listing 3.1: ONNX Export Configuration"),
         ("train_args = dict", "Listing 5.1: YOLO11s Training Configuration"),
-        ("model.export(", "Listing 5.2: ONNX Export Command"),
-        ("ONNXObjectModel", "Listing 5.3: ONNX Model Loading"),
+        ("def export_best(save_dir)", "Listing 5.2b: Training Export Function"),
+        ("YOLO(str(best_src)).export(", "Listing 5.2: ONNX Export Command"),
+        ("model = ONNXObjectModel(", "Listing 5.3: ONNX Model Loading"),
         ("DATA_DIR = BASE_DIR", "Listing 5.4: Application Startup Initialization"),
-        ("detector.process_frame", "Listing 5.5: Camera Frame Inference"),
-        ("pipeline.handle_result", "Listing 5.6: Pipeline Result Handling"),
-        ("NO-Hardhat = true", "Listing 5.7: Example Rule Conditions"),
+        ("pipeline.handle_result( primary,", "Listing 5.5: Camera Frame Inference"),
+        ("pipeline.handle_result( result,", "Listing 5.6: Pipeline Result Handling"),
         ("def start_camera", "Listing 5.8: Camera Thread Startup"),
-        ("def evaluate_rules", "Listing 5.9: Rule Evaluation Loop"),
         ('"dashboard": PageSpec', "Listing 5.10: Dashboard Page Registration"),
         ("db.add_detection_log", "Listing 5.11: Detection Log Persistence"),
         ("def _hash_password", "Listing 5.12: PBKDF2 Password Hashing"),
         ('atype == "email"', "Listing 5.13: Alarm Action Dispatch"),
-        ("def generate_report", "Listing 5.15: Analytics Report Generation"),
-        ("stats_engine.get_summary", "Listing 5.14: Analytics Query Generation"),
+        ("total = int(summary.get(\"total_detections\"", "Listing 5.14: Analytics Query Generation"),
+        ("stats_engine.get_compliance_trend(", "Listing 5.14b: Analytics Trend Query"),
+        ("def generate_report(filepath,", "Listing 5.15: Analytics Report Generation"),
         ("python -m nuitka", "Listing 5.16: Windows Build Command"),
     ]
     for needle, title in checks:
@@ -366,6 +371,12 @@ def style_code_blocks(body: str) -> str:
             continue
         original_code = code.get_text()
         label = infer_code_listing_title(original_code, language, count)
+        prev = pre.find_previous_sibling("p")
+        if prev is not None:
+            prev_text = prev.get_text(separator=" ", strip=True)
+            if prev_text.startswith("Code excerpt:") or prev_text.startswith("Listing"):
+                label = prev_text
+                prev.decompose()
         wrapper = soup.new_tag("div")
         wrapper["class"] = "code-block"
         wrapper["data-code-index"] = str(count)
@@ -511,6 +522,56 @@ def enable_update_fields_on_open(document: Document) -> None:
     settings.append(update_fields)
 
 
+def add_footer_page_number(section, fmt: str = "decimal", start_num: int | None = None) -> None:
+    footer = section.footer
+    footer.is_linked_to_previous = False
+    for p in footer.paragraphs:
+        p.clear()
+    paragraph = footer.paragraphs[0]
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+
+    for existing in section._sectPr.findall(qn("w:pgNumType")):
+        section._sectPr.remove(existing)
+    pgNumType = OxmlElement("w:pgNumType")
+    pgNumType.set(qn("w:fmt"), fmt)
+    if start_num is not None:
+        pgNumType.set(qn("w:start"), str(start_num))
+    section._sectPr.append(pgNumType)
+
+    run = paragraph.add_run()
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    run._r.append(begin)
+
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = "PAGE"
+    run._r.append(instr)
+
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    run._r.append(separate)
+
+    placeholder = paragraph.add_run("1")
+    placeholder.font.size = Pt(10)
+
+    end_run = paragraph.add_run()
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    end_run._r.append(end)
+
+
+def copy_section_format(source, target) -> None:
+    target.page_width = source.page_width
+    target.page_height = source.page_height
+    target.top_margin = source.top_margin
+    target.bottom_margin = source.bottom_margin
+    target.left_margin = source.left_margin
+    target.right_margin = source.right_margin
+
+
 def add_auto_field_block(document: Document, field_code: str, placeholder: str) -> None:
     paragraph = document.add_paragraph()
     paragraph.paragraph_format.space_after = Pt(8)
@@ -647,64 +708,50 @@ TABLE_CAPTION_BY_HEADERS = {
     ("Monitoring Need", "Traditional Camera System", "Smart Eye Approach"): "Table 1.1: Traditional Surveillance Compared with Smart Eye",
     ("Area", "Included in Smart Eye", "Not Included in Current Scope"): "Table 1.2: Project Scope Boundaries",
     ("Objective", "Related Deliverable"): "Table 1.3: Research Objectives and Deliverables",
-    ("Output Type", "Examples"): "Table 1.4: Expected System Outputs",
-    ("Research Area", "Contribution to Smart Eye"): "Table 2.1: Literature Areas and Project Relevance",
-    ("Requirement", "Importance for Smart Eye"): "Table 2.2: Object Detection Requirements",
-    ("Detected Condition", "Possible Rule", "Possible System Response"): "Table 2.3: PPE Detection and System Response Mapping",
-    ("Stage", "Purpose"): "Table 2.4: Face Recognition Pipeline Stages",
-    ("Question", "Smart Eye Component"): "Table 2.5: Detection-to-Action Integration Questions",
-    ("Layer", "Contribution"): "Table 2.6: Project Contribution Layers",
-    ("Study / Source", "Technique", "Dataset / Domain", "Main Result", "Limitation", "Relation to Smart Eye"): "Table 2.7: Comparison of Previous Studies",
-    ("Technology", "Role in Smart Eye", "Strength", "Limitation"): "Table 2.8: Technology Comparison",
+    ("Question", "Smart Eye Component"): "Table 2.1: Detection-to-Action Integration Questions",
+    ("Layer", "Contribution"): "Table 2.2: Project Contribution Layers",
+    ("Study / Source", "Technique", "Dataset / Domain", "Main Result", "Limitation", "Relation to Smart Eye"): "Table 2.3: Comparison of Previous Studies",
+    ("Technology", "Role in Smart Eye", "Strength", "Limitation"): "Table 2.4: Technology Comparison",
     ("Requirement Type", "Minimum Specification", "Recommended Specification"): "Table 3.1: Hardware Requirements",
     ("Category", "Technology Used", "Purpose"): "Table 3.2: Software Requirements",
     ("Requirement Concern", "Design Response in Smart Eye"): "Table 3.3: Requirement Concerns and Design Responses",
     ("Methodology Stage", "Input", "Processing", "Output"): "Table 3.4: Proposed Methodology Stages",
     ("Architectural View", "Main Concern", "Example in Smart Eye"): "Table 3.5: Architectural Views",
     ("User-Facing Module", "Code Module", "Main Responsibility"): "Table 3.6: Main Application Modules",
-    ("Training Choice", "Reason"): "Table 3.7: Object Detection Training Choices",
-    ("Level", "Description", "Example Output"): "Table 3.8: Runtime Detection Pipeline Levels",
-    ("Configuration Element", "Effect"): "Table 3.9: Face Recognition Configuration Effects",
-    ("Rule Aspect", "Purpose"): "Table 3.10: Rule Configuration Elements",
-    ("Workflow", "Database Role"): "Table 3.11: Database Workflow Support",
-    ("Analytics Output", "Data Used", "Purpose"): "Table 3.12: Analytics Outputs",
+    ("Class ID", "Class Name", "Runtime Meaning"): "Table 3.7: Object Detection Training Classes",
+    ("Training Choice", "Reason"): "Table 3.8: Object Detection Training Choices",
+    ("Level", "Description", "Example Output"): "Table 3.9: Runtime Detection Pipeline Levels",
+    ("Configuration Element", "Effect"): "Table 3.10: Face Recognition Configuration Effects",
+    ("Rule Aspect", "Purpose"): "Table 3.11: Rule Configuration Elements",
+    ("Workflow", "Database Role"): "Table 3.12: Database Workflow Support",
+    ("Analytics Output", "Data Used", "Purpose"): "Table 3.13: Analytics Outputs",
     ("Data Category", "Created By", "Used For", "Stored In"): "Table 4.1: Dataset and Operational Data Categories",
     ("Field", "Description"): "Table 4.2: Object Detection Dataset Source",
     ("Class Name", "Type", "Description", "Expected Value / Range"): "Table 4.3: Dataset Classes and Features",
     ("Class", "Example Application Use"): "Table 4.4: Dataset Classes and Application Use",
     ("Augmentation", "Expected Benefit"): "Table 4.5: Data Augmentation Benefits",
     ("Class", "Before Balancing Boxes", "After Balancing Boxes", "Added Training Copies", "Class Weight"): "Table 4.6: Class Balancing and Training Weights",
-    ("Split", "Image Count", "Percentage", "Purpose"): "Table 4.6: Dataset Split Plan",
     ("Dataset Item", "Image Count", "Percentage / Notes", "Purpose"): "Table 4.7: Dataset Processing and Split Counts",
     ("Data Type", "Storage Location / Table", "Purpose"): "Table 4.8: Local Application Data",
     ("Layer", "Responsibility", "Example Components"): "Table 5.1: Implementation Layers",
     ("Category", "Technology / Library", "Implementation Purpose"): "Table 5.2: Implementation Technology Stack",
-    ("Artifact", "Source Path", "Report Use"): "Table 5.3: Training Notebook Artifacts",
-    ("Folder", "Purpose"): "Table 5.4: Runtime Data Folders",
-    ("Package", "Main Responsibility"): "Table 5.5: Project Package Responsibilities",
-    ("Backend Component", "Main File / Package", "Implementation Role"): "Table 5.6: Backend Components",
-    ("Responsibility Group", "Main Tasks"): "Table 5.7: Backend Runtime Responsibilities",
-    ("Navigation Group", "Page", "Purpose"): "Table 5.8: Frontend Navigation Groups",
-    ("Workflow", "Main Pages"): "Table 5.9: Frontend User Workflows",
-    ("Database Area", "Tables / Data", "Purpose"): "Table 5.10: Database Areas",
-    ("Table Group", "Tables", "Main Use"): "Table 5.11: Database Table Groups",
-    ("Role", "Capabilities"): "Table 5.12: Local Account Roles",
-    ("Action Category", "Examples", "Purpose"): "Table 5.13: Alarm Action Categories",
-    ("Review Question", "Related Analytics Output"): "Table 5.14: Analytics Review Questions",
-    ("Implementation Concern", "Main Module or File", "Report Evidence", "Verification Method"): "Table 5.15: Implementation Traceability Map",
-    ("Metric", "Final Value", "Purpose"): "Table 6.1: Final Performance Metrics Plan",
-    ("Metric", "Final Value", "Source / Purpose"): "Table 6.1: Final Model Validation Metrics",
-    ("Class", "Precision", "Recall", "mAP@0.5", "Notes"): "Table 6.2: Class-Level Evaluation Plan",
-    ("Class", "Images", "Instances", "Precision", "Recall", "mAP@0.5", "mAP@0.5:0.95", "Notes"): "Table 6.2: Class-Level Validation Results",
-    ("Runtime Measure", "Value", "Notes"): "Table 6.3: Runtime Evaluation Plan",
-    ("Metric", "Meaning in Smart Eye", "Risk if Weak"): "Table 6.4: Evaluation Metric Interpretation",
-    ("Evaluation Step", "Evidence Produced", "Report Location"): "Table 6.5: Evaluation Data Collection Plan",
-    ("Violation Class", "Precision", "Recall", "mAP@0.5", "Interpretation"): "Table 6.6: PPE Violation Class Interpretation",
-    ("Dataset Visual", "What to Look For", "Report Meaning"): "Table 6.7: Dataset Figure Interpretation Guide",
-    ("Training Visual", "What to Look For", "Report Meaning"): "Table 6.8: Training Figure Interpretation Guide",
-    ("Validation Visual", "What to Look For", "Report Meaning"): "Table 6.9: Validation Figure Interpretation Guide",
-    ("Qualitative Visual", "What to Compare", "Report Meaning"): "Table 6.10: Qualitative Figure Interpretation Guide",
-    ("Application Visual", "Expected Evidence", "Why It Matters"): "Table 6.11: Application Figure Interpretation Guide",
+    ("Folder", "Purpose"): "Table 5.3: Runtime Data Folders",
+    ("Package", "Main Responsibility"): "Table 5.4: Project Package Responsibilities",
+    ("Backend Component", "Main File / Package", "Implementation Role"): "Table 5.5: Backend Components",
+    ("Responsibility Group", "Main Tasks"): "Table 5.6: Backend Runtime Responsibilities",
+    ("Workflow", "Main Pages"): "Table 5.7: Frontend User Workflows",
+    ("Database Area", "Tables / Data", "Purpose"): "Table 5.8: Database Areas",
+    ("Role", "Capabilities"): "Table 5.9: Local Account Roles",
+    ("Action Category", "Examples", "Purpose"): "Table 5.10: Alarm Action Categories",
+    ("Review Question", "Related Analytics Output"): "Table 5.11: Analytics Review Questions",
+    ("Implementation Concern", "Main Module or File", "Evidence", "Verification Method"): "Table 5.12: Implementation Traceability Map",
+    ("Check", "Result", "Purpose"): "Table 6.1: Software Verification Checks",
+    ("Metric", "Final Value", "Source / Purpose"): "Table 6.2: Final Model Validation Metrics",
+    ("Class", "Images", "Instances", "Precision", "Recall", "mAP@0.5", "mAP@0.5:0.95", "Notes"): "Table 6.3: Class-Level Validation Results",
+    ("Runtime Measure", "Value", "Notes"): "Table 6.4: Runtime Evaluation Results",
+    ("Metric", "Meaning in Smart Eye", "Risk if Weak"): "Table 6.5: Evaluation Metric Interpretation",
+    ("Result", "Value", "Technical Meaning", "Smart Eye Impact"): "Table 6.6: Result Interpretation",
+    ("Violation Class", "Precision", "Recall", "mAP@0.5", "Interpretation"): "Table 6.7: PPE Violation Class Interpretation",
     ("Threat", "Effect on Report Claims", "Mitigation"): "Table 7.1: Threats to Validity",
     ("Error Type", "Example", "Possible Cause"): "Table 7.2: Error Analysis Categories",
     ("Priority", "Improvement", "Reason"): "Table 9.1: Future Work Priorities",
@@ -714,9 +761,7 @@ TABLE_CAPTION_BY_HEADERS = {
     ("Test ID", "Quality Attribute", "Test Method", "Expected Result"): "Table E.2: Non-Functional Test Cases",
     ("Test ID", "Evaluation Focus", "Required Evidence"): "Table E.3: Model Evaluation Test Cases",
     ("Table", "Main Fields", "Purpose"): "Table F.1: Database Table Reference",
-    ("Screenshot ID", "Page / Output", "What Must Be Visible"): "Table G.1: Screenshot Capture Checklist",
-    ("Screenshot ID", "Required Screenshot", "File Name", "Purpose"): "Table G.1: User Interface Screenshot Checklist",
-    ("Result ID", "Required Result Asset", "File Name", "Purpose"): "Table G.2: Result Figure Checklist",
+    ("Result ID", "Required Result Asset", "File Name", "Purpose"): "Table G.1: Result Figure Checklist",
 }
 
 
@@ -757,13 +802,19 @@ def add_table(document: Document, table_node: Tag, context: dict[str, int]) -> N
     columns = max(len(row) for row in rows)
     table = document.add_table(rows=len(rows), cols=columns)
     table.style = "Table Grid"
+    last_row_idx = len(rows) - 1
     for row_idx, row in enumerate(rows):
+        table_row = table.rows[row_idx]
+        keep_table_row_together(table_row)
         for col_idx in range(columns):
             cell_node = row[col_idx] if col_idx < len(row) else None
-            cell = table.cell(row_idx, col_idx)
+            cell = table_row.cells[col_idx]
             cell.text = ""
             if cell_node is not None:
                 paragraph = cell.paragraphs[0]
+                paragraph.paragraph_format.keep_together = True
+                if row_idx != last_row_idx:
+                    paragraph.paragraph_format.keep_with_next = True
                 add_inline_runs(paragraph, cell_node, bold=row_idx == 0)
     document.add_paragraph()
 
@@ -851,6 +902,8 @@ def add_mermaid_to_docx(document: Document, node: Tag, mermaid_dir: Path | None)
 
 def add_math_to_docx(document: Document, node: Tag, math_dir: Path | None) -> None:
     raw_idx = node.get("data-equation-index", "")
+    eq_number = node.get("data-equation-number", "")
+    eq_description = node.get("data-equation-description", "")
     try:
         idx = int(raw_idx)
     except ValueError:
@@ -864,10 +917,16 @@ def add_math_to_docx(document: Document, node: Tag, math_dir: Path | None) -> No
                 pixel_width, _pixel_height = dimensions
                 width = min(5.8, max(1.2, pixel_width / 170.0))
             add_centered_picture(document, png_path, width=width, max_height=1.2)
-            return
         except Exception:
-            pass
-    add_paragraph(document, inline_text(node))
+            add_paragraph(document, inline_text(node))
+    else:
+        add_paragraph(document, inline_text(node))
+    if eq_number:
+        tc_paragraph = document.add_paragraph()
+        tc_paragraph.paragraph_format.space_before = Pt(0)
+        tc_paragraph.paragraph_format.space_after = Pt(0)
+        tc_text = f"Equation {eq_number}: {eq_description}" if eq_description else f"Equation {eq_number}"
+        add_tc_field(tc_paragraph, tc_text, "E")
 
 
 def add_wrapped_code_to_docx(document: Document, node: Tag) -> None:
@@ -970,9 +1029,14 @@ def write_docx(
             r"TOC \f T \h \z",
             "",
         ),
+        "List of Equations": (
+            r"TOC \f E \h \z",
+            "",
+        ),
     }
     skip_auto_placeholder = False
     context = {"table_index": 0}
+    add_footer_page_number(document.sections[0], "lowerRoman")
 
     for child in body.children:
         if isinstance(child, NavigableString):
@@ -993,6 +1057,10 @@ def write_docx(
                     add_auto_field_block(document, field_code, placeholder)
                     skip_auto_placeholder = True
                     continue
+                if heading_text.startswith("1. "):
+                    new_section = document.add_section()
+                    copy_section_format(document.sections[0], new_section)
+                    add_footer_page_number(new_section, "decimal", 1)
 
             render_node_to_docx(document, child, markdown_path.parent, mermaid_dir, math_dir, context)
 
